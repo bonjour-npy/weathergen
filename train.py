@@ -135,7 +135,7 @@ def train(cfg: utils.option.Config):
         raise ValueError(f"Unknown: {cfg.diffusion.timestep_type}")
     
     # fine-tuning
-    # ddpm = utils.inference.load_model('/opt/data/private/project/weather-gen_9.27_domain/logs/diffusion/kitti_360/spherical-1024/20241020T074330/models/diffusion_0000300000.pth', device='cuda')
+    # ddpm = utils.inference.load_model('/path_to/diffusion.pth', device='cuda')
 
     ddpm.train()
     ddpm.to(device)
@@ -307,7 +307,8 @@ def train(cfg: utils.option.Config):
 
             with accelerator.accumulate(ddpm):
                 loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model='train')
-                # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune') # fine-tune
+                # fine-tune
+                # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune') 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
