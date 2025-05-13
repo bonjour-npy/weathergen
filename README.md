@@ -5,6 +5,4 @@ Seeing Through Fog: https://light.princeton.edu/datasets/automated_driving_datas
 
 ### Prepare environment：
 
-conda env create -f environment.yml
-
-`print("Hello Markdown")` 
+`conda env create -f environment.yml` 
