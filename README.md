@@ -17,7 +17,3 @@ set train_model at 'train' or 'finetune'
 
 `python generate.py` 
 
-//### Evaluate:
-
-`python sample_and_save.py`
-`python evaluate.py`
