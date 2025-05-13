@@ -188,11 +188,11 @@ def stf_process(weather_flag: str, batchsize: int):
     B = batchsize
     x_weather = torch.empty(B, 5, H, W)
     if weather_flag == 'snow':
-        all_point_path = np.genfromtxt('./seeingthroughfog/test_snow_heavy.txt', dtype='U', delimiter='\n')
+        all_point_path = np.genfromtxt('/path_to/seeingthroughfog/test_snow_heavy.txt', dtype='U', delimiter='\n')
         selected_path = np.random.choice(all_point_path, size=B, replace=False)
 
         for i in range(B):
-            point_path = Path('.e/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
+            point_path = Path('/path_to/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
             points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
             points = points[:, :4]
             xyz = points[:, :3]  # xyz
@@ -229,11 +229,11 @@ def stf_process(weather_flag: str, batchsize: int):
 
 
     if weather_flag == 'rain':
-        all_point_path = np.genfromtxt('./seeingthroughfog/rain.txt', dtype='U', delimiter='\n')
+        all_point_path = np.genfromtxt('/path_to/seeingthroughfog/rain.txt', dtype='U', delimiter='\n')
         selected_path = np.random.choice(all_point_path, size=B, replace=False)
 
         for i in range(B):
-            point_path = Path('./seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
+            point_path = Path('/path_to/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
             points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
             points = points[:, :4]
             xyz = points[:, :3]  # xyz
@@ -267,11 +267,11 @@ def stf_process(weather_flag: str, batchsize: int):
             x_weather[i] = x
     
     if weather_flag == 'fog':
-        all_point_path = np.genfromtxt('./seeingthroughfog/test_dense_fog.txt', dtype='U', delimiter='\n')
+        all_point_path = np.genfromtxt('/path_to/seeingthroughfog/test_dense_fog.txt', dtype='U', delimiter='\n')
         selected_path = np.random.choice(all_point_path, size=B, replace=False)
 
         for i in range(B):
-            point_path = Path('./seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
+            point_path = Path('/path_to/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
             points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
             points = points[:, :4]
             xyz = points[:, :3]  # xyz
@@ -450,10 +450,10 @@ def evaluate(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=Path, default='./project/diffusion_steps.pth')
-    parser.add_argument("--sample_dir", type=str, default='./project/results')
+    parser.add_argument("--ckpt", type=Path, default='/path_to/diffusion_steps.pth')
+    parser.add_argument("--sample_dir", type=str, default='/path_to/results')
     parser.add_argument("--dataset", choices=["train", "test", "all"], default="all")
-    parser.add_argument("--batch_size", type=int, default=8) #16
+    parser.add_argument("--batch_size", type=int, default=8) 
     parser.add_argument("--num_workers", type=int, default=4)
     args = parser.parse_args()
     evaluate(args)
