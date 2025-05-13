@@ -145,8 +145,8 @@ class GaussianDiffusion(nn.Module):
         loss = loss / loss_mask.add(1e-8)  # (B,)
         loss = (loss * self.get_loss_weight(steps)).mean()
         loss_control = self.kl(weather_out.softmax(-1).log(), text[4].unsqueeze(0).repeat_interleave(prediction.shape[0], dim=0).softmax(-1))
-        # loss_domain = self.kl(domain_1.softmax(-1).log(), domain_2.softmax(-1))
-        loss_domain = (self.criterion(domain_1, domain_2) * self.get_loss_weight(steps)).mean()
+        loss_domain = self.kl(domain_1.softmax(-1).log(), domain_2.softmax(-1))
+        # loss_domain = (self.criterion(domain_1, domain_2) * self.get_loss_weight(steps)).mean()
         loss = loss + loss_control + loss_domain
         return loss
 
