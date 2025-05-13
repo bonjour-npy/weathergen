@@ -101,23 +101,23 @@ class KITTI360(ds.GeneratorBasedBuilder):
         ds.BuilderConfig(
             name="unfolding-2048",
             description="scan unfolding, 64x2048 resolution",
-            data_dir="/opt/data/private/KITTI-360/data_3d_raw",
+            data_dir="/path_to/KITTI-360/data_3d_raw",
         ),
         ds.BuilderConfig(
             name="spherical-2048",
             description="spherical projection, 64x2048 resolution",
-            data_dir="/opt/data/private/KITTI-360/data_3d_raw",
+            data_dir="/path_to/KITTI-360/data_3d_raw",
         ),
         # 64x1024
         ds.BuilderConfig(
             name="unfolding-1024",
             description="scan unfolding, 64x1024 resolution",
-            data_dir="/opt/data/private/KITTI-360/data_3d_raw",
+            data_dir="/path_to/KITTI-360/data_3d_raw",
         ),
         ds.BuilderConfig(
             name="spherical-1024",
             description="spherical projection, 64x1024 resolution",
-            data_dir="/opt/data/private/KITTI-360/data_3d_raw",
+            data_dir="/path_to/KITTI-360/data_3d_raw",
         ),
     ]
 
