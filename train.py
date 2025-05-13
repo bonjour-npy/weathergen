@@ -135,7 +135,7 @@ def train(cfg: utils.option.Config):
         raise ValueError(f"Unknown: {cfg.diffusion.timestep_type}")
     
     # fine-tuning
-    # ddpm = utils.inference.load_model('/path_to/diffusion.pth', device='cuda')
+    # ddpm = utils.inference.load_model('/path_to/diffusion_steps.pth', device='cuda')
 
     ddpm.train()
     ddpm.to(device)
