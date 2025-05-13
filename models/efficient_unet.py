@@ -438,8 +438,6 @@ class EfficientUNet(nn.Module):
         ########################################################
         if train_model == 'train':
             x_0_ab = (images - b * h) / a
-            # has_nan = torch.isnan(x_0_ab).any()
-            # print("Contains NaN:", has_nan)
             x_0_ab = self.in_conv_vae(x_0_ab)
             x_0_ab = self.in_conv_vae2(x_0_ab)
             x_0_ab = self.in_conv_vae3(x_0_ab)
