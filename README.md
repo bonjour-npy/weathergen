@@ -9,3 +9,4 @@ Seeing Through Fog: https://light.princeton.edu/datasets/automated_driving_datas
 
 ### Pretrain
 
+`accelerate launch --mixed_precision 'fp16' --dynamo_backend 'no' train.py` 
