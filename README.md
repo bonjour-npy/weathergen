@@ -9,6 +9,6 @@ Seeing Through Fog: https://light.princeton.edu/datasets/automated_driving_datas
 
 ### Pretrain and finetune
 
-set trainmodel at train or finetune
+set train_model at 'train' or 'finetune'
 
 `accelerate launch --mixed_precision 'fp16' --dynamo_backend 'no' train.py` 
