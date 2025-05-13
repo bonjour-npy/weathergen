@@ -4,3 +4,5 @@ KITTI-360: https://www.cvlibs.net/datasets/kitti-360/download.php only KITTI-360
 Seeing Through Fog: https://light.princeton.edu/datasets/automated_driving_dataset
 
 ### Prepare environment：
+
+conda env create -f environment.yml
