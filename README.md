@@ -19,3 +19,4 @@ set train_model at 'train' or 'finetune'
 
 The generated and labeled data can be found in https://pan.baidu.com/s/1_waBH02ZXpSlEKFA-o5_bw, password: 7878
 
+The label tool is: https://github.com/ch-sa/labelCloud
