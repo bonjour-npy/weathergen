@@ -29,15 +29,16 @@ from models.diffusion import (
     ContinuousTimeGaussianDiffusion,
     DiscreteTimeGaussianDiffusion,
 )
-from models.efficient_unet import EfficientUNet
+from models.efficient_unet import EfficientUNet  # With Mamba
 from models.refinenet import LiDARGenRefineNet
 from utils.lidar import LiDARUtility, get_hdl64e_linear_ray_angles
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning)
 torch._dynamo.config.suppress_errors = True
 torch._dynamo.config.automatic_dynamic_shapes = False
 rng = np.random.default_rng(seed=42)
+
 
 def train(cfg: utils.option.Config):
     torch.backends.cudnn.benchmark = True
@@ -81,8 +82,8 @@ def train(cfg: utils.option.Config):
     if cfg.model.architecture == "efficient_unet":
         model = EfficientUNet(
             in_channels=sum(channels),
-            resolution=cfg.data.resolution,
-            base_channels=cfg.model.base_channels,
+            resolution=cfg.data.resolution,  # 64, 1024
+            base_channels=cfg.model.base_channels,  # 64
             temb_channels=cfg.model.temb_channels,
             channel_multiplier=cfg.model.channel_multiplier,
             num_residual_blocks=cfg.model.num_residual_blocks,
@@ -133,22 +134,21 @@ def train(cfg: utils.option.Config):
         )
     else:
         raise ValueError(f"Unknown: {cfg.diffusion.timestep_type}")
-    
+
     # fine-tuning
     # ddpm = utils.inference.load_model('/path_to/diffusion_steps.pth', device='cuda')
 
     ddpm.train()
     ddpm.to(device)
 
-    clip_model = clip.load("ViT-B/32",device=device)
+    clip_model = clip.load("ViT-B/32", device=device)
 
     if accelerator.is_main_process:
         ddpm_ema = EMA(
             ddpm,
             beta=cfg.training.ema_decay,
             update_every=cfg.training.ema_update_every,
-            update_after_step=cfg.training.lr_warmup_steps
-            * cfg.training.gradient_accumulation_steps,
+            update_after_step=cfg.training.lr_warmup_steps * cfg.training.gradient_accumulation_steps,
         )
         ddpm_ema.to(device)
 
@@ -194,20 +194,16 @@ def train(cfg: utils.option.Config):
 
     lr_scheduler = utils.training.get_cosine_schedule_with_warmup(
         optimizer=optimizer,
-        num_warmup_steps=cfg.training.lr_warmup_steps
-        * cfg.training.gradient_accumulation_steps,
-        num_training_steps=cfg.training.num_steps
-        * cfg.training.gradient_accumulation_steps,
+        num_warmup_steps=cfg.training.lr_warmup_steps * cfg.training.gradient_accumulation_steps,
+        num_training_steps=cfg.training.num_steps * cfg.training.gradient_accumulation_steps,
     )
 
-    ddpm, optimizer, dataloader, lr_scheduler = accelerator.prepare(
-        ddpm, optimizer, dataloader, lr_scheduler
-    )
+    ddpm, optimizer, dataloader, lr_scheduler = accelerator.prepare(ddpm, optimizer, dataloader, lr_scheduler)
 
     # =================================================================================
     # Utility
     # =================================================================================
-    
+
     def preprocess(batch):
         x = []
         if cfg.data.train_depth:
@@ -223,16 +219,17 @@ def train(cfg: utils.option.Config):
         )
         return x
 
+    # 随即筛选天气
     def random_select():
         Q = np.random.randint(0, 4)
         if Q == 0:
-            weather_flag = 'normal'
+            weather_flag = "normal"
         if Q == 1:
-            weather_flag = 'fog'
+            weather_flag = "fog"
         if Q == 2:
-            weather_flag = 'snow'
+            weather_flag = "snow"
         if Q == 3:
-            weather_flag = 'rain'
+            weather_flag = "rain"
         return weather_flag
 
     def split_channels(image: torch.Tensor):
@@ -248,9 +245,7 @@ def train(cfg: utils.option.Config):
             out[f"{tag}/depth"] = utils.render.colorize(depth)
             metric = lidar_utils.revert_depth(depth)
             mask = (metric > lidar_utils.min_depth) & (metric < lidar_utils.max_depth)
-            out[f"{tag}/depth/orig"] = utils.render.colorize(
-                metric / lidar_utils.max_depth
-            )
+            out[f"{tag}/depth/orig"] = utils.render.colorize(metric / lidar_utils.max_depth)
             xyz = lidar_utils.to_xyz(metric) / lidar_utils.max_depth * mask
             normal = -utils.render.estimate_surface_normal(xyz)
             normal = lidar_utils.denormalize(normal)
@@ -279,36 +274,41 @@ def train(cfg: utils.option.Config):
         disable=not accelerator.is_main_process,
     )
 
-    text = {"This is the LiDAR range map for a sunny day.", "This is the LiDAR range map for a foggy day.", 
-            "This is the LiDAR range map for a snowy day.", "This is the LiDAR range map for a rainy day."}
+    text = {
+        "This is the LiDAR range map for a sunny day.",
+        "This is the LiDAR range map for a foggy day.",
+        "This is the LiDAR range map for a snowy day.",
+        "This is the LiDAR range map for a rainy day.",
+    }
     text_emb = clip.tokenize(text).to(device)
     with torch.no_grad():
-        text_features = clip_model.encode_text(text_emb) # B, 512
+        text_features = clip_model.encode_text(text_emb)  # B, 512
     global_step = 0
     while global_step < cfg.training.num_steps:
         ddpm.train()
 
-        for batch in dataloader:
-            x_0 = preprocess(batch) # B,2,64,1024
+        for batch in dataloader:  # 每个 batch 输入时单独进行天气处理
+            x_0 = preprocess(batch)  # B, 2, 64, 1024
             weather_flag = random_select()
-            x_0 = weather_process(x_0, weather_flag, batch['xyz'], batch['depth'])
-            if weather_flag == 'normal':
+            x_0 = weather_process(x_0, weather_flag, batch["xyz"], batch["depth"])
+            if weather_flag == "normal":
                 text_features = torch.cat([text_features, text_features[0].unsqueeze(0)], dim=0)
                 x_weather = x_0
-            if weather_flag == 'fog':
+            if weather_flag == "fog":
                 text_features = torch.cat([text_features, text_features[1].unsqueeze(0)], dim=0)
+                # 从 stf 中选取对应天气的 B 个点云并投影
                 x_weather = stf_process(weather_flag, x_0)
-            if weather_flag == 'snow':
+            if weather_flag == "snow":
                 text_features = torch.cat([text_features, text_features[2].unsqueeze(0)], dim=0)
                 x_weather = stf_process(weather_flag, x_0)
-            if weather_flag == 'rain':
+            if weather_flag == "rain":
                 text_features = torch.cat([text_features, text_features[3].unsqueeze(0)], dim=0)
                 x_weather = stf_process(weather_flag, x_0)
 
             with accelerator.accumulate(ddpm):
-                loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model='train')
+                loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model="train")
                 # fine-tune
-                # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune') 
+                # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune')
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
@@ -333,7 +333,7 @@ def train(cfg: utils.option.Config):
                         num_steps=cfg.diffusion.num_sampling_steps,
                         rng=torch.Generator(device=device).manual_seed(0),
                         weather=x_0,
-                        train_model='train',
+                        train_model="train",
                     )
                     log_images(sample, "sample", global_step)
 

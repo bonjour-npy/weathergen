@@ -84,17 +84,11 @@ class ResidualBlock(nn.Module):
         self.conv2.apply(ops.zero_out)
 
         # skip connection
-        self.skip = (
-            ops.Conv2d(in_channels, out_channels, 1, 1, 0)
-            if in_channels != out_channels
-            else nn.Identity()
-        )
+        self.skip = ops.Conv2d(in_channels, out_channels, 1, 1, 0) if in_channels != out_channels else nn.Identity()
 
         self.register_buffer("scale", torch.tensor(scale).float())
 
-    def residual(
-        self, x: torch.Tensor, emb: torch.Tensor, h_emb: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def residual(self, x: torch.Tensor, emb: torch.Tensor, h_emb: torch.Tensor | None = None) -> torch.Tensor:
         h = self.norm1(x)
         h = self.silu1(h)
         h = self.conv1(h)
@@ -175,30 +169,29 @@ class Block(nn.Module):
             else nn.Identity()
         )
 
-    def forward(
-        self, h: torch.Tensor, temb: torch.Tensor, h_emb: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def forward(self, h: torch.Tensor, temb: torch.Tensor, h_emb: torch.Tensor | None = None) -> torch.Tensor:
         h = self.downsample(h)
         h = self.residual_blocks(h, temb, h_emb)
         h = self.self_attn_block(h)
         h = self.upsample(h)
         return h
 
+
 class PVMLayer(nn.Module):
-    def __init__(self, input_dim, output_dim, d_state = 16, d_conv = 4, expand = 2):
+    def __init__(self, input_dim, output_dim, d_state=16, d_conv=4, expand=2):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.norm = nn.LayerNorm(input_dim)
         self.mamba = Mamba(
-                d_model=input_dim//4, # Model dimension d_model 
-                d_state=d_state,  # SSM state expansion factor
-                d_conv=d_conv,    # Local convolution width
-                expand=expand,    # Block expansion factor
+            d_model=input_dim // 4,  # Model dimension d_model
+            d_state=d_state,  # SSM state expansion factor
+            d_conv=d_conv,  # Local convolution width
+            expand=expand,  # Block expansion factor
         )
         self.proj = nn.Linear(input_dim, output_dim)
-        self.skip_scale= nn.Parameter(torch.ones(1))
-    
+        self.skip_scale = nn.Parameter(torch.ones(1))
+
     def forward(self, x):
         if x.dtype == torch.float16:
             x = x.type(torch.float32)
@@ -207,7 +200,7 @@ class PVMLayer(nn.Module):
         x = einops.rearrange(x, "B C H W -> B C (H W)")
         n_tokens = x.shape[2:].numel()
         img_dims = x.shape[2:]
-        x_flat = x.reshape(B, C, n_tokens).transpose(-1, -2) # Transform back into B (H W) C
+        x_flat = x.reshape(B, C, n_tokens).transpose(-1, -2)  # Transform back into B (H W) C
         x_norm = self.norm(x_flat)
 
         x1, x2, x3, x4 = torch.chunk(x_norm, 4, dim=2)
@@ -215,7 +208,7 @@ class PVMLayer(nn.Module):
         x_mamba2 = self.mamba(x2) + self.skip_scale * x2
         x_mamba3 = self.mamba(x3) + self.skip_scale * x3
         x_mamba4 = self.mamba(x4) + self.skip_scale * x4
-        x_mamba = torch.cat([x_mamba1, x_mamba2,x_mamba3,x_mamba4], dim=2)
+        x_mamba = torch.cat([x_mamba1, x_mamba2, x_mamba3, x_mamba4], dim=2)
         # x_mamba = self.mamba(x_norm) + self.skip_scale * x_norm
 
         x_mamba = self.norm(x_mamba)
@@ -223,6 +216,7 @@ class PVMLayer(nn.Module):
         out = x_mamba.transpose(-1, -2).reshape(B, self.output_dim, *img_dims)
         out = einops.rearrange(out, "B C (H W) -> B C H W", H=H, W=W)
         return out
+
 
 class EfficientUNet(nn.Module):
     """
@@ -291,15 +285,18 @@ class EfficientUNet(nn.Module):
         )
 
         # weather condition
-        self.in_conv_weather1 = ops.Conv2d(in_channels, in_channels-2, 7, 3, 3, ring=ring)
+        self.in_conv_weather1 = ops.Conv2d(in_channels, in_channels - 2, 7, 3, 3, ring=ring)
         self.in_conv_weather2 = ops.Conv2d(8, 8, 3, 2, 2, ring=ring)
         self.in_conv_weather3 = ops.Conv2d(1, 1, 3, 2, 2, ring=ring)
-        self.encoder_weather1 = nn.Sequential(nn.Linear(7*87,512), 
-                                              nn.ReLU(),)
-        self.encoder_weather2 = nn.Sequential(nn.Linear(512,256), 
-                                              nn.ReLU(),)
-        self.weather_output = nn.Linear(256,512)
-
+        self.encoder_weather1 = nn.Sequential(
+            nn.Linear(7 * 87, 512),
+            nn.ReLU(),
+        )
+        self.encoder_weather2 = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+        )
+        self.weather_output = nn.Linear(256, 512)
 
         # mamba settings
         self.mamba1 = nn.Sequential(PVMLayer(input_dim=C[3], output_dim=C[3]))
@@ -333,10 +330,12 @@ class EfficientUNet(nn.Module):
         self.in_conv_vae = ops.Conv2d(2, 2, 7, 3, 3, ring=ring)
         self.in_conv_vae2 = ops.Conv2d(2, 1, 3, 2, 2, ring=ring)
         self.in_conv_vae3 = ops.Conv2d(1, 1, 3, 2, 2, ring=ring)
-        self.encoder_vae = nn.Sequential(nn.Linear(7*87,256),
-                    nn.ReLU(),
-                    nn.Linear(256,128),
-                    nn.ReLU(),)
+        self.encoder_vae = nn.Sequential(
+            nn.Linear(7 * 87, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+        )
         self.vae_mu = torch.nn.Linear(128, 10)
         self.vae_sigma = torch.nn.Linear(128, 10)
 
@@ -346,22 +345,29 @@ class EfficientUNet(nn.Module):
         self.vae_linear3 = torch.nn.Linear(256, 609)
 
         # learnable_mask
-        self.mask = nn.Parameter(torch.zeros(1, 2, 64, 1024), requires_grad=True) #fintune
+        self.mask = nn.Parameter(torch.zeros(1, 2, 64, 1024), requires_grad=True)  # fintune
 
-
-    def forward(self, images: torch.Tensor, timesteps: torch.Tensor, images_condition: torch.Tensor, weather: torch.Tensor,
-                alpha: torch.Tensor, sigma: torch.Tensor, train_model: str) -> torch.Tensor:
+    def forward(
+        self,
+        images: torch.Tensor,
+        timesteps: torch.Tensor,
+        images_condition: torch.Tensor,
+        weather: torch.Tensor,
+        alpha: torch.Tensor,
+        sigma: torch.Tensor,
+        train_model: str,
+    ) -> torch.Tensor:
         a = alpha.clone()
         b = sigma.clone()
 
         # newmask
-        if train_model == 'train':
+        if train_model == "train":
             h = images + torch.ones_like(images) * self.mask
-        elif train_model == 'finetune':
+        elif train_model == "finetune":
             h = images + 0 * self.mask
-        elif train_model == 'clip':
+        elif train_model == "clip":
             h = images + 0 * self.mask
-            
+
         # h = images
 
         h_emb = images_condition
@@ -376,46 +382,46 @@ class EfficientUNet(nn.Module):
             cenc = self.coords_encoding(self.coords)
             cenc = cenc.repeat_interleave(h.shape[0], dim=0)
             h = torch.cat([h, cenc], dim=1)
-            if train_model == 'train':
-                h_emb = torch.cat([h_emb, cenc], dim=1) # B,34,64,1024
-            elif train_model == 'finetune':
-                h_emb = torch.cat([h_emb, cenc], dim=1) # B,34,64,1024
+            if train_model == "train":
+                h_emb = torch.cat([h_emb, cenc], dim=1)  # B,34,64,1024
+            elif train_model == "finetune":
+                h_emb = torch.cat([h_emb, cenc], dim=1)  # B,34,64,1024
             # elif train_model == 'clipsample':
             #     h_emb = torch.cat([h_emb, cenc], dim=1) # B,34,64,1024
 
-        if train_model == 'train':
-            h_emb = self.in_conv_weather1(h_emb) # B,32,22,342
-            h_emb = self.silu(self.mamba_wea_1(h_emb)) # B,8,22,342
-            h_emb = self.in_conv_weather2(h_emb) # B,8,12,172
+        if train_model == "train":
+            h_emb = self.in_conv_weather1(h_emb)  # B,32,22,342
+            h_emb = self.silu(self.mamba_wea_1(h_emb))  # B,8,22,342
+            h_emb = self.in_conv_weather2(h_emb)  # B,8,12,172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.silu(self.mamba_wea_2(h_emb)) # B,1,12,172
+            h_emb = self.silu(self.mamba_wea_2(h_emb))  # B,1,12,172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.in_conv_weather3(h_emb) # B,1,7,87
+            h_emb = self.in_conv_weather3(h_emb)  # B,1,7,87
             h_emb = h_emb.view(-1, h_emb.shape[2] * h_emb.shape[3])
-            h_emb = self.encoder_weather1(h_emb) # B,256
+            h_emb = self.encoder_weather1(h_emb)  # B,256
             h_emb = self.encoder_weather2(h_emb)
-            weather_out = self.weather_output(h_emb) # B,512
-        elif train_model == 'finetune':
-            h_emb = self.in_conv_weather1(h_emb) # B,32,22,342
-            h_emb = self.silu(self.mamba_wea_1(h_emb)) # B,8,22,342
-            h_emb = self.in_conv_weather2(h_emb) # B,8,12,172
+            weather_out = self.weather_output(h_emb)  # B,512
+        elif train_model == "finetune":
+            h_emb = self.in_conv_weather1(h_emb)  # B,32,22,342
+            h_emb = self.silu(self.mamba_wea_1(h_emb))  # B,8,22,342
+            h_emb = self.in_conv_weather2(h_emb)  # B,8,12,172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.silu(self.mamba_wea_2(h_emb)) # B,1,12,172
+            h_emb = self.silu(self.mamba_wea_2(h_emb))  # B,1,12,172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.in_conv_weather3(h_emb) # B,1,7,87
+            h_emb = self.in_conv_weather3(h_emb)  # B,1,7,87
             h_emb = h_emb.view(-1, h_emb.shape[2] * h_emb.shape[3])
-            h_emb = self.encoder_weather1(h_emb) # B,512
-            h_emb = self.encoder_weather2(h_emb) # B,256
-            weather_out = self.weather_output(h_emb) # B,512
-        elif train_model == 'clip':
+            h_emb = self.encoder_weather1(h_emb)  # B,512
+            h_emb = self.encoder_weather2(h_emb)  # B,256
+            weather_out = self.weather_output(h_emb)  # B,512
+        elif train_model == "clip":
             h_emb = images_condition
             h_emb = self.encoder_weather2(h_emb)
 
         # u-net part
-        h = self.in_conv(h) # B,64,64,1024
-        h1 = self.d_block1(h, temb, h_emb) # B,64,64,1024
-        h2 = self.d_block2(h1, temb, h_emb) # B,128,32,512
-        h3 = self.d_block3(h2, temb, h_emb) # B,256,16,256
+        h = self.in_conv(h)  # B,64,64,1024
+        h1 = self.d_block1(h, temb, h_emb)  # B,64,64,1024
+        h2 = self.d_block2(h1, temb, h_emb)  # B,128,32,512
+        h3 = self.d_block3(h2, temb, h_emb)  # B,256,16,256
         h3_skip = h3
 
         h3_1 = self.silu(self.ebn1(self.mamba1(h3)))
@@ -424,19 +430,19 @@ class EfficientUNet(nn.Module):
         h3_2 = einops.rearrange(h3_2, "B C H W -> B C W H")
         h3 = h3_1 * 0.5 + h3_2 * 0.5
 
-        h4 = self.d_block4(h3, temb, h_emb) # B,512,8,128
+        h4 = self.d_block4(h3, temb, h_emb)  # B,512,8,128
         h4 = self.silu(self.ebn2(self.mamba2(h4)))
         # up-sampling   8-16 add mamba
-        h = self.u_block4(h4, temb, h_emb) # B,256,16,256
+        h = self.u_block4(h4, temb, h_emb)  # B,256,16,256
         h = self.silu(self.ebn3(self.mamba3(h)))
-        h = self.u_block3(_join(h, h3_skip), temb, h_emb) # B,128,32,512
+        h = self.u_block3(_join(h, h3_skip), temb, h_emb)  # B,128,32,512
         h = self.silu(self.ebn4(self.mamba4(h)))
-        h = self.u_block2(_join(h, h2), temb, h_emb) # B,64,64,1024
-        h = self.u_block1(_join(h, h1), temb, h_emb) # B,64,64,1024
-        h = self.out_conv(h) # B,64,64,1024
+        h = self.u_block2(_join(h, h2), temb, h_emb)  # B,64,64,1024
+        h = self.u_block1(_join(h, h1), temb, h_emb)  # B,64,64,1024
+        h = self.out_conv(h)  # B,64,64,1024
 
         ########################################################
-        if train_model == 'train':
+        if train_model == "train":
             x_0_ab = (images - b * h) / a
             x_0_ab = self.in_conv_vae(x_0_ab)
             x_0_ab = self.in_conv_vae2(x_0_ab)
@@ -467,7 +473,7 @@ class EfficientUNet(nn.Module):
             z2 = self.vae_linear2(z2)
             z2 = self.vae_linear3(z2)
             weather_domain2 = z2.view(w1, w2, w3, w4)
-        elif train_model == 'finetune':
+        elif train_model == "finetune":
             x_0_ab = (images - b * h) / a
             x_0_ab = self.in_conv_vae(x_0_ab)
             x_0_ab = self.in_conv_vae2(x_0_ab)
@@ -498,7 +504,7 @@ class EfficientUNet(nn.Module):
             z2 = self.vae_linear2(z2)
             z2 = self.vae_linear3(z2)
             weather_domain2 = z2.view(w1, w2, w3, w4)
-        elif train_model == 'clip':
+        elif train_model == "clip":
             weather_out = 0
             x_0_domain1 = 0
             weather_domain2 = 0

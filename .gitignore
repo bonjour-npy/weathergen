@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 *.py[cod]
 
-data/kitti_360/dataset/
+data/kitti_360/dataset
+data/SeeingThroughFog

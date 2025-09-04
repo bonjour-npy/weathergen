@@ -6,9 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 
 
-def get_hdl64e_linear_ray_angles(
-    H: int = 64, W: int = 2048, device: torch.device = "cpu"
-):
+def get_hdl64e_linear_ray_angles(H: int = 64, W: int = 2048, device: torch.device = "cpu"):
     h_up, h_down = 3, -25
     w_left, w_right = 180, -180
     elevation = 1 - torch.arange(H, device=device) / H  # [0, 1]
