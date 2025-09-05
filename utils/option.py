@@ -34,11 +34,11 @@ class TrainingConfig:
     batch_size_train: int = 8 # 16
     batch_size_eval: int = 2 # 4
     num_workers: int = 16 # 4
-    num_steps: int = 300_000
+    num_steps: int = 300_000  # fine-tune 100_000 (I GUESS)
     steps_save_image: int = 50_000 # 50_000
     steps_save_model: int = 50_000 # 50_000
     gradient_accumulation_steps: int = 1
-    lr: float = 1e-4 # 4e-4 # fine-tune 1e-4
+    lr: float = 4e-4  # fine-tune 1e-4
     lr_warmup_steps: int = 10_000
     adam_beta1: float = 0.9
     adam_beta2: float = 0.99

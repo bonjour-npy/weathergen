@@ -222,6 +222,8 @@ class EfficientUNet(nn.Module):
     """
     Re-implementation of Efficient U-Net (https://arxiv.org/abs/2205.11487)
     + Our modification for LiDAR domain
+
+    Usage: loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model="train")
     """
 
     def __init__(
@@ -263,7 +265,7 @@ class EfficientUNet(nn.Module):
 
         # timestep embedding
         self.time_embedding = nn.Sequential(
-            ops.SinusoidalPositionalEmbedding(base_channels),
+            ops.SinusoidalPositionalEmbedding(base_channels),  # 正弦
             nn.Linear(base_channels, temb_channels),
             nn.SiLU(),
             nn.Linear(temb_channels, temb_channels),
@@ -362,7 +364,7 @@ class EfficientUNet(nn.Module):
 
         # newmask
         if train_model == "train":
-            h = images + torch.ones_like(images) * self.mask
+            h = images + torch.ones_like(images) * self.mask  # MDP 的一部分，因此只有训练的时候使用
         elif train_model == "finetune":
             h = images + 0 * self.mask
         elif train_model == "clip":
@@ -383,66 +385,71 @@ class EfficientUNet(nn.Module):
             cenc = cenc.repeat_interleave(h.shape[0], dim=0)
             h = torch.cat([h, cenc], dim=1)
             if train_model == "train":
-                h_emb = torch.cat([h_emb, cenc], dim=1)  # B,34,64,1024
+                h_emb = torch.cat([h_emb, cenc], dim=1)  # B, 34, 64, 1024
             elif train_model == "finetune":
-                h_emb = torch.cat([h_emb, cenc], dim=1)  # B,34,64,1024
+                h_emb = torch.cat([h_emb, cenc], dim=1)  # B, 34, 64, 1024
             # elif train_model == 'clipsample':
-            #     h_emb = torch.cat([h_emb, cenc], dim=1) # B,34,64,1024
+            #     h_emb = torch.cat([h_emb, cenc], dim=1) # B, 34, 64, 1024
 
         if train_model == "train":
-            h_emb = self.in_conv_weather1(h_emb)  # B,32,22,342
-            h_emb = self.silu(self.mamba_wea_1(h_emb))  # B,8,22,342
-            h_emb = self.in_conv_weather2(h_emb)  # B,8,12,172
+            h_emb = self.in_conv_weather1(h_emb)  # B, 32, 22, 342
+            h_emb = self.silu(self.mamba_wea_1(h_emb))  # B, 8, 22, 342
+            h_emb = self.in_conv_weather2(h_emb)  # B, 8, 12, 172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.silu(self.mamba_wea_2(h_emb))  # B,1,12,172
-            h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.in_conv_weather3(h_emb)  # B,1,7,87
+            h_emb = self.silu(self.mamba_wea_2(h_emb))  # B, 1, 12, 172
+            # h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
+            # correction
+            h_emb = einops.rearrange(h_emb, "B C W H -> B C H W")
+            h_emb = self.in_conv_weather3(h_emb)  # B, 1, 7, 87
             h_emb = h_emb.view(-1, h_emb.shape[2] * h_emb.shape[3])
-            h_emb = self.encoder_weather1(h_emb)  # B,256
-            h_emb = self.encoder_weather2(h_emb)
-            weather_out = self.weather_output(h_emb)  # B,512
+            h_emb = self.encoder_weather1(h_emb)  # B, 512
+            h_emb = self.encoder_weather2(h_emb)  # B, 256
+            weather_out = self.weather_output(h_emb)  # B, 512
         elif train_model == "finetune":
-            h_emb = self.in_conv_weather1(h_emb)  # B,32,22,342
-            h_emb = self.silu(self.mamba_wea_1(h_emb))  # B,8,22,342
-            h_emb = self.in_conv_weather2(h_emb)  # B,8,12,172
+            h_emb = self.in_conv_weather1(h_emb)  # B, 32, 22, 342
+            h_emb = self.silu(self.mamba_wea_1(h_emb))  # B, 8, 22, 342
+            h_emb = self.in_conv_weather2(h_emb)  # B, 8, 12, 172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.silu(self.mamba_wea_2(h_emb))  # B,1,12,172
+            h_emb = self.silu(self.mamba_wea_2(h_emb))  # B, 1, 12, 172
             h_emb = einops.rearrange(h_emb, "B C H W -> B C W H")
-            h_emb = self.in_conv_weather3(h_emb)  # B,1,7,87
+            h_emb = self.in_conv_weather3(h_emb)  # B, 1, 7, 87
             h_emb = h_emb.view(-1, h_emb.shape[2] * h_emb.shape[3])
-            h_emb = self.encoder_weather1(h_emb)  # B,512
-            h_emb = self.encoder_weather2(h_emb)  # B,256
-            weather_out = self.weather_output(h_emb)  # B,512
+            h_emb = self.encoder_weather1(h_emb)  # B, 512
+            h_emb = self.encoder_weather2(h_emb)  # B, 256
+            weather_out = self.weather_output(h_emb)  # B, 512
         elif train_model == "clip":
             h_emb = images_condition
-            h_emb = self.encoder_weather2(h_emb)
+            h_emb = self.encoder_weather2(h_emb)  # input 512, output 256
 
         # u-net part
-        h = self.in_conv(h)  # B,64,64,1024
-        h1 = self.d_block1(h, temb, h_emb)  # B,64,64,1024
-        h2 = self.d_block2(h1, temb, h_emb)  # B,128,32,512
-        h3 = self.d_block3(h2, temb, h_emb)  # B,256,16,256
+        h = self.in_conv(h)  # B, 64, 64, 1024
+        h1 = self.d_block1(h, temb, h_emb)  # B, 64, 64, 1024
+        h2 = self.d_block2(h1, temb, h_emb)  # B, 128, 32, 512
+        h3 = self.d_block3(h2, temb, h_emb)  # B, 256, 16, 256
         h3_skip = h3
 
-        h3_1 = self.silu(self.ebn1(self.mamba1(h3)))
+        h3_1 = self.silu(self.ebn1(self.mamba1(h3)))  # Row-wise Mamba
         h3 = einops.rearrange(h3, "B C H W -> B C W H")
-        h3_2 = self.silu(self.ebn1(self.mamba1(h3)))
-        h3_2 = einops.rearrange(h3_2, "B C H W -> B C W H")
+        h3_2 = self.silu(self.ebn1(self.mamba1(h3)))  # Column-wise Mamba
+        # h3_2 = einops.rearrange(h3_2, "B C H W -> B C W H")
+        # coreection
+        h3_2 = einops.rearrange(h3_2, "B C W H -> B C H W")
         h3 = h3_1 * 0.5 + h3_2 * 0.5
 
-        h4 = self.d_block4(h3, temb, h_emb)  # B,512,8,128
+        h4 = self.d_block4(h3, temb, h_emb)  # B, 512, 8, 128
         h4 = self.silu(self.ebn2(self.mamba2(h4)))
         # up-sampling   8-16 add mamba
-        h = self.u_block4(h4, temb, h_emb)  # B,256,16,256
+        h = self.u_block4(h4, temb, h_emb)  # B, 256, 16, 256
         h = self.silu(self.ebn3(self.mamba3(h)))
-        h = self.u_block3(_join(h, h3_skip), temb, h_emb)  # B,128,32,512
+        h = self.u_block3(_join(h, h3_skip), temb, h_emb)  # B, 128, 32, 512 where join == concat
         h = self.silu(self.ebn4(self.mamba4(h)))
-        h = self.u_block2(_join(h, h2), temb, h_emb)  # B,64,64,1024
-        h = self.u_block1(_join(h, h1), temb, h_emb)  # B,64,64,1024
-        h = self.out_conv(h)  # B,64,64,1024
+        h = self.u_block2(_join(h, h2), temb, h_emb)  # B, 64, 64, 1024
+        h = self.u_block1(_join(h, h1), temb, h_emb)  # B, 64, 64, 1024
+        h = self.out_conv(h)  # B, 64, 64, 1024
 
-        ########################################################
+        # vae part
         if train_model == "train":
+            # 一步降噪
             x_0_ab = (images - b * h) / a
             x_0_ab = self.in_conv_vae(x_0_ab)
             x_0_ab = self.in_conv_vae2(x_0_ab)
@@ -452,6 +459,7 @@ class EfficientUNet(nn.Module):
             x_0_ab = self.encoder_vae(x_0_ab)
             mu1 = self.vae_mu(x_0_ab)
             sigma1 = self.vae_sigma(x_0_ab)
+            # reparameterization sampling for x_0
             eps1 = torch.randn_like(sigma1)
             z1 = mu1 + eps1 * torch.sqrt(torch.exp(sigma1))
             z1 = self.vae_linear1(z1)
@@ -467,6 +475,7 @@ class EfficientUNet(nn.Module):
             weather = self.encoder_vae(weather)
             mu2 = self.vae_mu(weather)
             sigma2 = self.vae_sigma(weather)
+            # reparameterization sampling for stf weather
             eps2 = torch.randn_like(sigma2)
             z2 = mu2 + eps2 * torch.sqrt(torch.exp(sigma2))
             z2 = self.vae_linear1(z2)
@@ -509,4 +518,8 @@ class EfficientUNet(nn.Module):
             x_0_domain1 = 0
             weather_domain2 = 0
 
+        # h: predicted noise,
+        # weather_out: input weather feature for contrastive learning
+        # x_0_domain1: one-step denoised generated VAE feature
+        # weather_domain2: stf VAE feature
         return h, weather_out, x_0_domain1, weather_domain2

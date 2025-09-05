@@ -1,7 +1,10 @@
 .vscode/
 __pycache__/
 *.pyc
-*.py[cod]
 
-data/kitti_360/dataset
+data/kitti_360/dataset/
 data/SeeingThroughFog
+
+weathergen_generated/
+
+logs/

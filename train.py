@@ -125,11 +125,13 @@ def train(cfg: utils.option.Config):
             noise_schedule=cfg.diffusion.noise_schedule,
             num_training_steps=cfg.diffusion.num_training_steps,
         )
+    # r2dm adopts continuous
+    # num_training_steps equals to 1000 in base.py
     elif cfg.diffusion.timestep_type == "continuous":
         ddpm = ContinuousTimeGaussianDiffusion(
             model=model,
             prediction_type=cfg.diffusion.prediction_type,
-            loss_type=cfg.diffusion.loss_type,
+            loss_type=cfg.diffusion.loss_type,  # l2
             noise_schedule=cfg.diffusion.noise_schedule,
         )
     else:

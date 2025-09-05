@@ -82,9 +82,7 @@ class GaussianDiffusion(nn.Module):
             return torch.randn(*shape, generator=rng, **kwargs)
         elif isinstance(rng, list):
             assert len(rng) == shape[0]
-            return torch.stack(
-                [torch.randn(*shape[1:], generator=r, **kwargs) for r in rng]
-            )
+            return torch.stack([torch.randn(*shape[1:], generator=r, **kwargs) for r in rng])
         else:
             raise ValueError(f"invalid rng: {rng}")
 
@@ -131,24 +129,40 @@ class GaussianDiffusion(nn.Module):
         train_model: str,
         loss_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """
+        Compute training loss for a batch of data
+
+        loss: SMG Loss
+        loss_control: CLC Loss
+        loss_domain: LFA Loss
+        """
         # shared in continuous/discrete versions
         loss_mask = torch.ones_like(x_0) if loss_mask is None else loss_mask
         x_t, noise, alpha, sigma = self.q_step_from_x_0(x_0, steps)
         condition = self.get_network_condition(steps)
 
-        prediction, weather_out, domain_1, domain_2 = self.model(x_t, condition, x_condition, weather, alpha, sigma, train_model)
+        # 实际计算定义在 efficient_unet 中
+        prediction, weather_out, domain_1, domain_2 = self.model(
+            x_t, condition, x_condition, weather, alpha, sigma, train_model
+        )
 
+        # gt
         target = self.get_target(x_0, steps, noise)
-        loss = self.criterion(prediction, target)  # (B,C,H,W)
+        # traditional diffusion loss
+        loss = self.criterion(prediction, target)  # (B, C, H, W)
         loss = einops.reduce(loss * loss_mask, "B ... -> B ()", "sum")
         loss_mask = einops.reduce(loss_mask, "B ... -> B ()", "sum")
         loss = loss / loss_mask.add(1e-8)  # (B,)
         loss = (loss * self.get_loss_weight(steps)).mean()
-        loss_control = self.kl(weather_out.softmax(-1).log(), text[4].unsqueeze(0).repeat_interleave(prediction.shape[0], dim=0).softmax(-1))
+        loss_control = self.kl(
+            weather_out.softmax(-1).log(),
+            text[4].unsqueeze(0).repeat_interleave(prediction.shape[0], dim=0).softmax(-1),
+        )
         loss_domain = self.kl(domain_1.softmax(-1).log(), domain_2.softmax(-1))
         # loss_domain = (self.criterion(domain_1, domain_2) * self.get_loss_weight(steps)).mean()
-        # loss = loss + loss_control + 0 * loss_domain
-        loss = loss + loss_control + loss_domain
+        # ablation study: without LFA
+        loss = loss + loss_control + 0 * loss_domain
+        # loss = loss + loss_control + loss_domain
         return loss
 
     def forward(
