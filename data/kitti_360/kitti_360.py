@@ -117,10 +117,12 @@ class KITTI360(ds.GeneratorBasedBuilder):
         ds.BuilderConfig(
             name="spherical-1024",
             description="spherical projection, 64x1024 resolution",
-            data_dir="/path_to/KITTI-360/data_3d_raw",
+            # data_dir="/path_to/KITTI-360/data_3d_raw",
+            data_dir="/home/24-nipeiyang/Codes/weathergen/data/kitti_360/dataset/data_3d_raw",
         ),
     ]
 
+    # DEFAULT_CONFIG_NAME 和 BUILDER_CONFIGS 会影响 Hugging Face 的识别，如不同会重新生成缓存
     DEFAULT_CONFIG_NAME = "spherical-1024"
 
     def _parse_config_name(self):

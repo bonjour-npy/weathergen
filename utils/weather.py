@@ -14,6 +14,7 @@ from PIL import Image
 import matplotlib.cm as cm
 import numba
 import numpy as np
+from rich import print
 import matplotlib.pyplot as plt
 
 rng = np.random.default_rng(seed=42)
@@ -173,7 +174,7 @@ def stf_process(weather_flag: str, x_0: torch.Tensor):
         for i in range(B):
             # point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[i] + ".bin")
             point_path = Path("./data/SeeingThroughFog/SeeingThroughFogCompressedExtracted/lidar_hdl64_strongest") / (
-                selected_path[i] + ".bin"
+                selected_path[i].strip().replace(",", "_") + ".bin"
             )
             points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
             points = points[:, :4]
@@ -214,8 +215,11 @@ def stf_process(weather_flag: str, x_0: torch.Tensor):
         selected_path = np.random.choice(all_point_path, size=B, replace=False)
         for i in range(B):
             # point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[i] + ".bin")
+
+            # selected_path[x]: 2018-02-03_20-58-04,00400
+            # target bin path: 2018-02-03_20-58-04_00400.bin
             point_path = Path("./data/SeeingThroughFog/SeeingThroughFogCompressedExtracted/lidar_hdl64_strongest") / (
-                selected_path[i] + ".bin"
+                selected_path[i].strip().replace(",", "_") + ".bin"
             )
             points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
             points = points[:, :4]
@@ -256,7 +260,7 @@ def stf_process(weather_flag: str, x_0: torch.Tensor):
         for i in range(B):
             # point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[i] + ".bin")
             point_path = Path("./data/SeeingThroughFog/SeeingThroughFogCompressedExtracted/lidar_hdl64_strongest") / (
-                selected_path[i] + ".bin"
+                selected_path[i].strip().replace(",", "_") + ".bin"
             )
             points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
             points = points[:, :4]
