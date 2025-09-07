@@ -353,11 +353,12 @@ class EfficientUNet(nn.Module):
         self,
         images: torch.Tensor,
         timesteps: torch.Tensor,
-        images_condition: torch.Tensor,
-        weather: torch.Tensor,
+        images_condition: torch.Tensor,  # condition input for CLC
+        weather: torch.Tensor,  # stf input for LFA
         alpha: torch.Tensor,
         sigma: torch.Tensor,
         train_model: str,
+        train_lfa: bool,
     ) -> torch.Tensor:
         a = alpha.clone()
         b = sigma.clone()
@@ -405,6 +406,7 @@ class EfficientUNet(nn.Module):
             h_emb = self.encoder_weather1(h_emb)  # B, 512
             h_emb = self.encoder_weather2(h_emb)  # B, 256
             weather_out = self.weather_output(h_emb)  # B, 512
+            # weather_out here is for contrastive learning (CLC)
         elif train_model == "finetune":
             h_emb = self.in_conv_weather1(h_emb)  # B, 32, 22, 342
             h_emb = self.silu(self.mamba_wea_1(h_emb))  # B, 8, 22, 342
@@ -446,80 +448,92 @@ class EfficientUNet(nn.Module):
         h = self.u_block2(_join(h, h2), temb, h_emb)  # B, 64, 64, 1024
         h = self.u_block1(_join(h, h1), temb, h_emb)  # B, 64, 64, 1024
         h = self.out_conv(h)  # B, 64, 64, 1024
+        # h here is the predicted noise
 
-        # vae part
-        if train_model == "train":
-            # 一步降噪
-            x_0_ab = (images - b * h) / a
-            x_0_ab = self.in_conv_vae(x_0_ab)
-            x_0_ab = self.in_conv_vae2(x_0_ab)
-            x_0_ab = self.in_conv_vae3(x_0_ab)
-            s1, s2, s3, s4 = x_0_ab.size()
-            x_0_ab = x_0_ab.view(-1, x_0_ab.shape[2] * x_0_ab.shape[3])
-            x_0_ab = self.encoder_vae(x_0_ab)
-            mu1 = self.vae_mu(x_0_ab)
-            sigma1 = self.vae_sigma(x_0_ab)
-            # reparameterization sampling for x_0
-            eps1 = torch.randn_like(sigma1)
-            z1 = mu1 + eps1 * torch.sqrt(torch.exp(sigma1))
-            z1 = self.vae_linear1(z1)
-            z1 = self.vae_linear2(z1)
-            z1 = self.vae_linear3(z1)
-            x_0_domain1 = z1.view(s1, s2, s3, s4)
+        """
+        #codebase 为什么我在使用acceleratee启动使用CUDA加速的训练脚本之后观察到：GPU的利用率时高时低，而且训练时间变得异常之高，这是为什么？我猜是stf数据集读取的问题，每计算一个batch都要进行IO读取？
+        先进行分析并确定到底是不是因为stf数据集要在每个batch加载才导致的GPU利用率时高时低，然后再给出解决方案，经过我的同意再进行应用修改。
+        """
 
-            weather = self.in_conv_vae(weather)
-            weather = self.in_conv_vae2(weather)
-            weather = self.in_conv_vae3(weather)
-            w1, w2, w3, w4 = weather.size()
-            weather = weather.view(-1, weather.shape[2] * weather.shape[3])
-            weather = self.encoder_vae(weather)
-            mu2 = self.vae_mu(weather)
-            sigma2 = self.vae_sigma(weather)
-            # reparameterization sampling for stf weather
-            eps2 = torch.randn_like(sigma2)
-            z2 = mu2 + eps2 * torch.sqrt(torch.exp(sigma2))
-            z2 = self.vae_linear1(z2)
-            z2 = self.vae_linear2(z2)
-            z2 = self.vae_linear3(z2)
-            weather_domain2 = z2.view(w1, w2, w3, w4)
-        elif train_model == "finetune":
-            x_0_ab = (images - b * h) / a
-            x_0_ab = self.in_conv_vae(x_0_ab)
-            x_0_ab = self.in_conv_vae2(x_0_ab)
-            x_0_ab = self.in_conv_vae3(x_0_ab)
-            s1, s2, s3, s4 = x_0_ab.size()
-            x_0_ab = x_0_ab.view(-1, x_0_ab.shape[2] * x_0_ab.shape[3])
-            x_0_ab = self.encoder_vae(x_0_ab)
-            mu1 = self.vae_mu(x_0_ab)
-            sigma1 = self.vae_sigma(x_0_ab)
-            eps1 = torch.randn_like(sigma1)
-            z1 = mu1 + eps1 * torch.sqrt(torch.exp(sigma1))
-            z1 = self.vae_linear1(z1)
-            z1 = self.vae_linear2(z1)
-            z1 = self.vae_linear3(z1)
-            x_0_domain1 = z1.view(s1, s2, s3, s4)
+        if train_lfa:
+            # vae part of LFA
+            if train_model == "train":
+                # 一步降噪
+                x_0_ab = (images - b * h) / a
+                x_0_ab = self.in_conv_vae(x_0_ab)
+                x_0_ab = self.in_conv_vae2(x_0_ab)
+                x_0_ab = self.in_conv_vae3(x_0_ab)
+                s1, s2, s3, s4 = x_0_ab.size()
+                x_0_ab = x_0_ab.view(-1, x_0_ab.shape[2] * x_0_ab.shape[3])
+                x_0_ab = self.encoder_vae(x_0_ab)
+                mu1 = self.vae_mu(x_0_ab)
+                sigma1 = self.vae_sigma(x_0_ab)
+                # reparameterization sampling for x_0
+                eps1 = torch.randn_like(sigma1)
+                z1 = mu1 + eps1 * torch.sqrt(torch.exp(sigma1))
+                z1 = self.vae_linear1(z1)
+                z1 = self.vae_linear2(z1)
+                z1 = self.vae_linear3(z1)
+                x_0_domain1 = z1.view(s1, s2, s3, s4)
 
-            weather = self.in_conv_vae(weather)
-            weather = self.in_conv_vae2(weather)
-            weather = self.in_conv_vae3(weather)
-            w1, w2, w3, w4 = weather.size()
-            weather = weather.view(-1, weather.shape[2] * weather.shape[3])
-            weather = self.encoder_vae(weather)
-            mu2 = self.vae_mu(weather)
-            sigma2 = self.vae_sigma(weather)
-            eps2 = torch.randn_like(sigma2)
-            z2 = mu2 + eps2 * torch.sqrt(torch.exp(sigma2))
-            z2 = self.vae_linear1(z2)
-            z2 = self.vae_linear2(z2)
-            z2 = self.vae_linear3(z2)
-            weather_domain2 = z2.view(w1, w2, w3, w4)
-        elif train_model == "clip":
-            weather_out = 0
-            x_0_domain1 = 0
-            weather_domain2 = 0
+                weather = self.in_conv_vae(weather)
+                weather = self.in_conv_vae2(weather)
+                weather = self.in_conv_vae3(weather)
+                w1, w2, w3, w4 = weather.size()
+                weather = weather.view(-1, weather.shape[2] * weather.shape[3])
+                weather = self.encoder_vae(weather)
+                mu2 = self.vae_mu(weather)
+                sigma2 = self.vae_sigma(weather)
+                # reparameterization sampling for stf weather
+                eps2 = torch.randn_like(sigma2)
+                z2 = mu2 + eps2 * torch.sqrt(torch.exp(sigma2))
+                z2 = self.vae_linear1(z2)
+                z2 = self.vae_linear2(z2)
+                z2 = self.vae_linear3(z2)
+                weather_domain2 = z2.view(w1, w2, w3, w4)
+            elif train_model == "finetune":
+                x_0_ab = (images - b * h) / a
+                x_0_ab = self.in_conv_vae(x_0_ab)
+                x_0_ab = self.in_conv_vae2(x_0_ab)
+                x_0_ab = self.in_conv_vae3(x_0_ab)
+                s1, s2, s3, s4 = x_0_ab.size()
+                x_0_ab = x_0_ab.view(-1, x_0_ab.shape[2] * x_0_ab.shape[3])
+                x_0_ab = self.encoder_vae(x_0_ab)
+                mu1 = self.vae_mu(x_0_ab)
+                sigma1 = self.vae_sigma(x_0_ab)
+                eps1 = torch.randn_like(sigma1)
+                z1 = mu1 + eps1 * torch.sqrt(torch.exp(sigma1))
+                z1 = self.vae_linear1(z1)
+                z1 = self.vae_linear2(z1)
+                z1 = self.vae_linear3(z1)
+                x_0_domain1 = z1.view(s1, s2, s3, s4)
 
-        # h: predicted noise,
-        # weather_out: input weather feature for contrastive learning
-        # x_0_domain1: one-step denoised generated VAE feature
-        # weather_domain2: stf VAE feature
-        return h, weather_out, x_0_domain1, weather_domain2
+                weather = self.in_conv_vae(weather)
+                weather = self.in_conv_vae2(weather)
+                weather = self.in_conv_vae3(weather)
+                w1, w2, w3, w4 = weather.size()
+                weather = weather.view(-1, weather.shape[2] * weather.shape[3])
+                weather = self.encoder_vae(weather)
+                mu2 = self.vae_mu(weather)
+                sigma2 = self.vae_sigma(weather)
+                eps2 = torch.randn_like(sigma2)
+                z2 = mu2 + eps2 * torch.sqrt(torch.exp(sigma2))
+                z2 = self.vae_linear1(z2)
+                z2 = self.vae_linear2(z2)
+                z2 = self.vae_linear3(z2)
+                weather_domain2 = z2.view(w1, w2, w3, w4)
+            elif train_model == "clip":
+                weather_out = 0
+                x_0_domain1 = 0
+                weather_domain2 = 0
+
+            # h: predicted noise,
+            # weather_out: input weather feature for contrastive learning
+            # x_0_domain1: one-step denoised generated VAE feature
+            # weather_domain2: stf VAE feature
+            return h, weather_out, x_0_domain1, weather_domain2
+
+        else:
+            # h: predicted noise,
+            # weather_out: input weather feature for contrastive learning
+            return h, weather_out

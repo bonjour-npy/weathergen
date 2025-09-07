@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from utils.weather import weather_process, stf_process
+from utils.stf_dataset import build_stf_loader
 import utils.inference
 import utils.option
 import utils.render
@@ -33,7 +34,8 @@ from models.efficient_unet import EfficientUNet  # With Mamba
 from models.refinenet import LiDARGenRefineNet
 from utils.lidar import LiDARUtility, get_hdl64e_linear_ray_angles
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# debug
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning)
 torch._dynamo.config.suppress_errors = True
 torch._dynamo.config.automatic_dynamic_shapes = False
@@ -200,7 +202,44 @@ def train(cfg: utils.option.Config):
         num_training_steps=cfg.training.num_steps * cfg.training.gradient_accumulation_steps,
     )
 
-    ddpm, optimizer, dataloader, lr_scheduler = accelerator.prepare(ddpm, optimizer, dataloader, lr_scheduler)
+    # STF weather loaders (only when LFA enabled)
+    if cfg.model.lfa:
+        stf_fog_loader = build_stf_loader(
+            weather="fog",
+            batch_size=cfg.training.batch_size_train,
+            num_workers=cfg.training.num_workers,
+            resolution=cfg.data.resolution,
+        )
+        stf_snow_loader = build_stf_loader(
+            weather="snow",
+            batch_size=cfg.training.batch_size_train,
+            num_workers=cfg.training.num_workers,
+            resolution=cfg.data.resolution,
+        )
+        stf_rain_loader = build_stf_loader(
+            weather="rain",
+            batch_size=cfg.training.batch_size_train,
+            num_workers=cfg.training.num_workers,
+            resolution=cfg.data.resolution,
+        )
+        ddpm, optimizer, dataloader, lr_scheduler, stf_fog_loader, stf_snow_loader, stf_rain_loader = (
+            accelerator.prepare(
+                ddpm, optimizer, dataloader, lr_scheduler, stf_fog_loader, stf_snow_loader, stf_rain_loader
+            )
+        )
+
+        def _infinite(loader):
+            while True:
+                for b in loader:
+                    yield b
+
+        stf_iters = {
+            "fog": iter(_infinite(stf_fog_loader)),
+            "snow": iter(_infinite(stf_snow_loader)),
+            "rain": iter(_infinite(stf_rain_loader)),
+        }
+    else:
+        ddpm, optimizer, dataloader, lr_scheduler = accelerator.prepare(ddpm, optimizer, dataloader, lr_scheduler)
 
     # =================================================================================
     # Utility
@@ -293,22 +332,58 @@ def train(cfg: utils.option.Config):
             x_0 = preprocess(batch)  # B, 2, 64, 1024
             weather_flag = random_select()
             x_0 = weather_process(x_0, weather_flag, batch["xyz"], batch["depth"])
+
             if weather_flag == "normal":
                 text_features = torch.cat([text_features, text_features[0].unsqueeze(0)], dim=0)
-                x_weather = x_0
+                # 是否启用 LFA
+                if cfg.model.lfa:
+                    x_weather = x_0
+
             if weather_flag == "fog":
                 text_features = torch.cat([text_features, text_features[1].unsqueeze(0)], dim=0)
-                # 从 stf 中选取对应天气的 B 个点云并投影
-                x_weather = stf_process(weather_flag, x_0)
+                # 启用 LFA 则从 STF DataLoader 取批次
+                if cfg.model.lfa:
+                    # 由 DataLoader 预取，避免在线 I/O 与投影阻塞
+                    x_weather = next(stf_iters["fog"]).to(device, non_blocking=True)
+
             if weather_flag == "snow":
                 text_features = torch.cat([text_features, text_features[2].unsqueeze(0)], dim=0)
-                x_weather = stf_process(weather_flag, x_0)
+                # 启用 LFA 则从 STF DataLoader 取批次
+                if cfg.model.lfa:
+                    x_weather = next(stf_iters["snow"]).to(device, non_blocking=True)
+
             if weather_flag == "rain":
                 text_features = torch.cat([text_features, text_features[3].unsqueeze(0)], dim=0)
-                x_weather = stf_process(weather_flag, x_0)
+                # 启用 LFA 则从 STF DataLoader 取批次
+                if cfg.model.lfa:
+                    x_weather = next(stf_iters["rain"]).to(device, non_blocking=True)
 
             with accelerator.accumulate(ddpm):
-                loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model="train")
+                """
+                # from GitHub
+                loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model='train')
+                # fine-tune
+                # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune')
+                accelerator.backward(loss)
+                """
+                if cfg.model.lfa:
+                    loss = ddpm(
+                        x_0=x_0,  # original input
+                        x_condition=x_0,  # condition input for CLC
+                        text=text_features,
+                        weather=x_weather,  # stf input for LFA
+                        train_model="train",
+                        train_lfa=cfg.model.lfa,
+                    )
+                else:
+                    # 不传入 x_weather 进行 LFA 计算
+                    loss = ddpm(
+                        x_0=x_0,
+                        x_condition=x_0,
+                        text=text_features,
+                        train_model="train",
+                        train_lfa=cfg.model.lfa,
+                    )
                 # fine-tune
                 # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune')
                 accelerator.backward(loss)

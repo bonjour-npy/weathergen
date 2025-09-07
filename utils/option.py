@@ -18,6 +18,7 @@ class ModelConfig:
     attn_num_heads: int = 8
     coords_encoding: Literal["spherical_harmonics", "polar_coordinates", "fourier_features", None] = "fourier_features"
     dropout: float = 0.0
+    lfa: bool = False  # Latent Feature Alignment
 
 
 @dataclasses.dataclass
@@ -32,10 +33,10 @@ class DiffusionConfig:
 
 @dataclasses.dataclass
 class TrainingConfig:
-    # batch_size_train: int = 8  # 16
-    # batch_size_eval: int = 2  # 4
-    batch_size_train: int = 16
-    batch_size_eval: int = 4
+    batch_size_train: int = 8  # 16
+    batch_size_eval: int = 2  # 4
+    # batch_size_train: int = 16
+    # batch_size_eval: int = 4
     num_workers: int = 16  # os.cpu_count() = 112
     num_steps: int = 300_000  # fine-tune 100_000 (I GUESS)
     steps_save_image: int = 50_000  # 50_000
