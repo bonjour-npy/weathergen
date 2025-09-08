@@ -14,6 +14,8 @@ import matplotlib.cm as cm
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
+
+# from accelerate.utils import DistributedDataParallelKwargs
 from ema_pytorch import EMA
 from rich import print
 from simple_parsing import ArgumentParser
@@ -50,6 +52,7 @@ def train(cfg: utils.option.Config):
     # Initialize accelerator
     # =================================================================================
 
+    # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
         mixed_precision=cfg.training.mixed_precision,
@@ -58,6 +61,7 @@ def train(cfg: utils.option.Config):
         dynamo_backend=cfg.training.dynamo_backend,
         split_batches=True,
         step_scheduler_with_optimizer=True,
+        # kwargs_handlers=[ddp_kwargs],
     )
     if accelerator.is_main_process:
         print(cfg)
@@ -119,6 +123,16 @@ def train(cfg: utils.option.Config):
     if accelerator.is_main_process:
         print(f"number of parameters: {utils.inference.count_parameters(model):,}")
 
+    # Freeze optional LFA/VAE branch when disabled to avoid DDP unused-params
+    # errors and unnecessary computation. Must be done BEFORE optimizer/DDP.
+    # Only applies to EfficientUNet which defines set_lfa_mode.
+    try:
+        if hasattr(model, "set_lfa_mode"):
+            model.set_lfa_mode(bool(cfg.model.lfa))
+    except Exception as e:
+        if accelerator.is_main_process:
+            print(f"[warn] set_lfa_mode failed: {e}")
+
     if cfg.diffusion.timestep_type == "discrete":
         ddpm = DiscreteTimeGaussianDiffusion(
             model=model,
@@ -170,7 +184,7 @@ def train(cfg: utils.option.Config):
     # =================================================================================
 
     optimizer = torch.optim.AdamW(
-        ddpm.parameters(),
+        (p for p in ddpm.parameters() if p.requires_grad),
         lr=cfg.training.lr,
         betas=(cfg.training.adam_beta1, cfg.training.adam_beta2),
         weight_decay=cfg.training.adam_weight_decay,
@@ -202,8 +216,9 @@ def train(cfg: utils.option.Config):
         num_training_steps=cfg.training.num_steps * cfg.training.gradient_accumulation_steps,
     )
 
-    # STF weather loaders (only when LFA enabled)
-    if cfg.model.lfa:
+    # STF weather loaders
+    need_stf = (cfg.training.train_model == "finetune") or bool(cfg.model.lfa)
+    if need_stf:
         stf_fog_loader = build_stf_loader(
             weather="fog",
             batch_size=cfg.training.batch_size_train,
@@ -222,10 +237,22 @@ def train(cfg: utils.option.Config):
             num_workers=cfg.training.num_workers,
             resolution=cfg.data.resolution,
         )
-        ddpm, optimizer, dataloader, lr_scheduler, stf_fog_loader, stf_snow_loader, stf_rain_loader = (
-            accelerator.prepare(
-                ddpm, optimizer, dataloader, lr_scheduler, stf_fog_loader, stf_snow_loader, stf_rain_loader
-            )
+        (
+            ddpm,
+            optimizer,
+            dataloader,
+            lr_scheduler,
+            stf_fog_loader,
+            stf_snow_loader,
+            stf_rain_loader,
+        ) = accelerator.prepare(
+            ddpm,
+            optimizer,
+            dataloader,
+            lr_scheduler,
+            stf_fog_loader,
+            stf_snow_loader,
+            stf_rain_loader,
         )
 
         def _infinite(loader):
@@ -233,13 +260,19 @@ def train(cfg: utils.option.Config):
                 for b in loader:
                     yield b
 
+        if accelerator.is_main_process:
+            print(f"STF loaders ready. Training Mode = {cfg.training.train_model}. LFA = {cfg.model.lfa}.")
         stf_iters = {
             "fog": iter(_infinite(stf_fog_loader)),
             "snow": iter(_infinite(stf_snow_loader)),
             "rain": iter(_infinite(stf_rain_loader)),
         }
     else:
-        ddpm, optimizer, dataloader, lr_scheduler = accelerator.prepare(ddpm, optimizer, dataloader, lr_scheduler)
+        ddpm, optimizer, dataloader, lr_scheduler = accelerator.prepare(
+            ddpm, optimizer, dataloader, lr_scheduler
+        )
+        if accelerator.is_main_process:
+            print(f"STF loaders off. Training Mode = {cfg.training.train_model}. LFA = {cfg.model.lfa}.")
 
     # =================================================================================
     # Utility
@@ -335,27 +368,24 @@ def train(cfg: utils.option.Config):
 
             if weather_flag == "normal":
                 text_features = torch.cat([text_features, text_features[0].unsqueeze(0)], dim=0)
-                # 是否启用 LFA
-                if cfg.model.lfa:
+                # 正常天气下微调时也不用加载 stf 数据集
+                if need_stf:
                     x_weather = x_0
 
             if weather_flag == "fog":
                 text_features = torch.cat([text_features, text_features[1].unsqueeze(0)], dim=0)
-                # 启用 LFA 则从 STF DataLoader 取批次
-                if cfg.model.lfa:
+                if need_stf:
                     # 由 DataLoader 预取，避免在线 I/O 与投影阻塞
                     x_weather = next(stf_iters["fog"]).to(device, non_blocking=True)
 
             if weather_flag == "snow":
                 text_features = torch.cat([text_features, text_features[2].unsqueeze(0)], dim=0)
-                # 启用 LFA 则从 STF DataLoader 取批次
-                if cfg.model.lfa:
+                if need_stf:
                     x_weather = next(stf_iters["snow"]).to(device, non_blocking=True)
 
             if weather_flag == "rain":
                 text_features = torch.cat([text_features, text_features[3].unsqueeze(0)], dim=0)
-                # 启用 LFA 则从 STF DataLoader 取批次
-                if cfg.model.lfa:
+                if need_stf:
                     x_weather = next(stf_iters["rain"]).to(device, non_blocking=True)
 
             with accelerator.accumulate(ddpm):
@@ -366,24 +396,35 @@ def train(cfg: utils.option.Config):
                 # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune')
                 accelerator.backward(loss)
                 """
-                if cfg.model.lfa:
+                # loss path
+                if cfg.training.train_model == "finetune":
                     loss = ddpm(
-                        x_0=x_0,  # original input
-                        x_condition=x_0,  # condition input for CLC
-                        text=text_features,
-                        weather=x_weather,  # stf input for LFA
-                        train_model="train",
-                        train_lfa=cfg.model.lfa,
-                    )
-                else:
-                    # 不传入 x_weather 进行 LFA 计算
-                    loss = ddpm(
-                        x_0=x_0,
+                        x_0=x_weather,
                         x_condition=x_0,
                         text=text_features,
-                        train_model="train",
-                        train_lfa=cfg.model.lfa,
+                        weather=x_weather,  # fine-tune 要加载 stf，但是用不用由 cfg.model.lfa 控制
+                        train_model="finetune",
+                        train_lfa=bool(cfg.model.lfa),
                     )
+                elif cfg.training.train_model == "train":
+                    if cfg.model.lfa:
+                        loss = ddpm(
+                            x_0=x_0,
+                            x_condition=x_0,
+                            text=text_features,
+                            weather=x_weather,
+                            train_model="train",
+                            train_lfa=True,
+                        )
+                    else:
+                        loss = ddpm(
+                            x_0=x_0,
+                            x_condition=x_0,
+                            text=text_features,
+                            weather=None,  # 传入 x_0 占位
+                            train_model="train",
+                            train_lfa=False,
+                        )
                 # fine-tune
                 # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune')
                 accelerator.backward(loss)

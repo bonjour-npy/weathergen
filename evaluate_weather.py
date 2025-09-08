@@ -1,3 +1,7 @@
+"""
+由于 stf 数据集加载的问题修改较多
+"""
+
 import argparse
 import datetime
 import json
@@ -15,6 +19,7 @@ import torch.nn.functional as F
 from rich import print
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from utils.stf_dataset import build_stf_loader
 
 import utils.inference
 from metrics import bev, distribution
@@ -25,9 +30,8 @@ MAX_DEPTH = 63.0
 MIN_DEPTH = 0.5
 DATASET_MAX_DEPTH = 80.0
 
-def get_hdl64e_linear_ray_angles(
-    HH: int = 64, WW: int = 1024, device: torch.device = "cpu"
-):
+
+def get_hdl64e_linear_ray_angles(HH: int = 64, WW: int = 1024, device: torch.device = "cpu"):
     h_up, h_down = 3, -25
     w_left, w_right = 180, -180
     elevation = 1 - torch.arange(HH, device=device) / HH  # [0, 1]
@@ -37,6 +41,7 @@ def get_hdl64e_linear_ray_angles(
     [elevation, azimuth] = torch.meshgrid([elevation, azimuth], indexing="ij")
     angles = torch.stack([elevation, azimuth])[None].deg2rad()
     return angles
+
 
 class LiDARUtility(nn.Module):
     def __init__(
@@ -138,6 +143,7 @@ class LiDARUtility(nn.Module):
         return mask.float()
         # return mask
 
+
 lidar_utils = LiDARUtility(
     resolution=(64, 1024),
     image_format="log_depth",
@@ -145,6 +151,7 @@ lidar_utils = LiDARUtility(
     max_depth=80.0,
     ray_angles=None,
 )
+
 
 def preprocess(xyzrdm):
     x = []
@@ -156,10 +163,12 @@ def preprocess(xyzrdm):
     x = torch.cat(x, dim=0)
     return x
 
+
 def scatter(array, index, value):
     for (h, w), v in zip(index, value):
         array[h, w] = v
     return array
+
 
 def resize(x, size):
     return F.interpolate(x, size=size, mode="nearest-exact")
@@ -182,129 +191,19 @@ class Samples(torch.utils.data.Dataset):
         return len(self.sample_path_list)
 
 
-def stf_process(weather_flag: str, batchsize: int):
-    H = 64
-    W = 1024
-    B = batchsize
-    x_weather = torch.empty(B, 5, H, W)
-    if weather_flag == 'snow':
-        all_point_path = np.genfromtxt('/path_to/seeingthroughfog/test_snow_heavy.txt', dtype='U', delimiter='\n')
-        selected_path = np.random.choice(all_point_path, size=B, replace=False)
-
-        for i in range(B):
-            point_path = Path('/path_to/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
-            points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
-            points = points[:, :4]
-            xyz = points[:, :3]  # xyz
-            x = xyz[:, [0]]
-            y = xyz[:, [1]]
-            z = xyz[:, [2]]
-            depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
-            mask = (depth >= 1.45) & (depth <= 80)
-            points = np.concatenate([points, depth, mask], axis=1)
-
-            h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
-            elevation = np.arcsin(z / depth) + abs(h_down)
-            grid_h = 1 - elevation / (h_up - h_down)
-            grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
-
-            # horizontal grid
-            azimuth = -np.arctan2(y, x)  # [-pi,pi]
-            grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
-            grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
-
-            grid = np.concatenate((grid_h, grid_w), axis=1)
-
-            # projection
-            order = np.argsort(-depth.squeeze(1))
-            proj_points = np.zeros((H, W, 4 + 2), dtype=points.dtype)
-            proj_points = scatter(proj_points, grid[order], points[order]).astype(np.float32)
-            xyzrdm = proj_points.transpose(2, 0, 1)
-            xyzrdm *= xyzrdm[[5]]
-            xyzrdm = torch.from_numpy(xyzrdm)
-            x = preprocess(xyzrdm)
-            x_weather[i] = x
-
-
-
-
-    if weather_flag == 'rain':
-        all_point_path = np.genfromtxt('/path_to/seeingthroughfog/rain.txt', dtype='U', delimiter='\n')
-        selected_path = np.random.choice(all_point_path, size=B, replace=False)
-
-        for i in range(B):
-            point_path = Path('/path_to/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
-            points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
-            points = points[:, :4]
-            xyz = points[:, :3]  # xyz
-            x = xyz[:, [0]]
-            y = xyz[:, [1]]
-            z = xyz[:, [2]]
-            depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
-            mask = (depth >= 1.45) & (depth <= 80)
-            points = np.concatenate([points, depth, mask], axis=1)
-
-            h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
-            elevation = np.arcsin(z / depth) + abs(h_down)
-            grid_h = 1 - elevation / (h_up - h_down)
-            grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
-
-            # horizontal grid
-            azimuth = -np.arctan2(y, x)  # [-pi,pi]
-            grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
-            grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
-
-            grid = np.concatenate((grid_h, grid_w), axis=1)
-
-            # projection
-            order = np.argsort(-depth.squeeze(1))
-            proj_points = np.zeros((H, W, 4 + 2), dtype=points.dtype)
-            proj_points = scatter(proj_points, grid[order], points[order]).astype(np.float32)
-            xyzrdm = proj_points.transpose(2, 0, 1)
-            xyzrdm *= xyzrdm[[5]]
-            xyzrdm = torch.from_numpy(xyzrdm)
-            x = preprocess(xyzrdm)
-            x_weather[i] = x
-    
-    if weather_flag == 'fog':
-        all_point_path = np.genfromtxt('/path_to/seeingthroughfog/test_dense_fog.txt', dtype='U', delimiter='\n')
-        selected_path = np.random.choice(all_point_path, size=B, replace=False)
-
-        for i in range(B):
-            point_path = Path('/path_to/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[i] + '.bin')
-            points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
-            points = points[:, :4]
-            xyz = points[:, :3]  # xyz
-            x = xyz[:, [0]]
-            y = xyz[:, [1]]
-            z = xyz[:, [2]]
-            depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
-            mask = (depth >= 1.45) & (depth <= 80)
-            points = np.concatenate([points, depth, mask], axis=1)
-
-            h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
-            elevation = np.arcsin(z / depth) + abs(h_down)
-            grid_h = 1 - elevation / (h_up - h_down)
-            grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
-
-            # horizontal grid
-            azimuth = -np.arctan2(y, x)  # [-pi,pi]
-            grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
-            grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
-
-            grid = np.concatenate((grid_h, grid_w), axis=1)
-
-            # projection
-            order = np.argsort(-depth.squeeze(1))
-            proj_points = np.zeros((H, W, 4 + 2), dtype=points.dtype)
-            proj_points = scatter(proj_points, grid[order], points[order]).astype(np.float32)
-            xyzrdm = proj_points.transpose(2, 0, 1)
-            xyzrdm *= xyzrdm[[5]]
-            xyzrdm = torch.from_numpy(xyzrdm)
-            x = preprocess(xyzrdm)
-            x_weather[i] = x
-
-    return x_weather
+def stf_batch_to_5ch(batch_2ch: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """将 STFDataset 返回的 2xHxW 批次转换为评估所需的 5xHxW（depth, x, y, z, reflectance）。"""
+    batch_2ch = batch_2ch.to(device)
+    # [-1,1] -> [0,1]
+    depth_norm01 = lidar_utils.denormalize(batch_2ch[:, [0]])
+    # 还原为 metric depth
+    depth_metric = lidar_utils.revert_depth(depth_norm01)
+    # 从 metric depth 恢复 xyz
+    xyz = lidar_utils.to_xyz(depth_metric)
+    # reflectance 已在 STFDataset 中经 [0,1] 归一化，并缩放到 [-1,1]
+    reflect01 = lidar_utils.denormalize(batch_2ch[:, [1]])
+    imgs_frd = torch.cat([depth_metric, xyz, reflect01], dim=1)
+    return imgs_frd
 
 
 @torch.no_grad()
@@ -337,10 +236,18 @@ def evaluate(args):
 
     real_set = dict(img_feats=list(), pts_feats=list(), bev_hists=list())
 
-    for i in range(12):
-        i = i + 1
-        imgs_frd = stf_process('snow', args.batch_size)
-        imgs_frd = imgs_frd.to(device)
+    # 使用 STFDataset 加载 STF 实际样本
+    stf_loader = build_stf_loader(
+        weather="snow", batch_size=args.batch_size, num_workers=args.num_workers, resolution=(64, 1024)
+    )
+    stf_iter = iter(stf_loader)
+    for _ in range(12):
+        try:
+            batch_2ch = next(stf_iter)
+        except StopIteration:
+            stf_iter = iter(stf_loader)
+            batch_2ch = next(stf_iter)
+        imgs_frd = stf_batch_to_5ch(batch_2ch, device)
         x = imgs_frd[:, 1].unsqueeze(1)
         y = imgs_frd[:, 2].unsqueeze(1)
         z = imgs_frd[:, 3].unsqueeze(1)
@@ -349,9 +256,7 @@ def evaluate(args):
         mask = torch.logical_and(depth > MIN_DEPTH, depth < MAX_DEPTH)
 
         with torch.inference_mode():
-            feats_img = extract_img_feats(
-                preprocess_img(imgs_frd, mask), feature="lidargen"
-            )
+            feats_img = extract_img_feats(preprocess_img(imgs_frd, mask), feature="lidargen")
         real_set["img_feats"].append(feats_img.cpu())
 
         point_clouds = einops.rearrange(xyz * mask, "B C H W -> B C (H W)")
@@ -363,8 +268,6 @@ def evaluate(args):
         with torch.inference_mode():
             feats_pts = extract_pts_feats(point_clouds / DATASET_MAX_DEPTH)
         real_set["pts_feats"].append(feats_pts.cpu())
-
-
 
     real_set["img_feats"] = torch.cat(real_set["img_feats"], dim=0).numpy()
     real_set["pts_feats"] = torch.cat(real_set["pts_feats"], dim=0).numpy()
@@ -385,11 +288,9 @@ def evaluate(args):
 
     for imgs_frd, mask in tqdm(gen_loader, desc="gen"):
         imgs_frd, mask = imgs_frd.to(device), mask.to(device)
-        if cfg.data['train_reflectance']:
+        if cfg.data["train_reflectance"]:
             with torch.inference_mode():
-                feats_img = extract_img_feats(
-                    preprocess_img(imgs_frd, mask), feature="lidargen"
-                )
+                feats_img = extract_img_feats(preprocess_img(imgs_frd, mask), feature="lidargen")
             gen_set["img_feats"].append(feats_img.cpu())
 
         xyz = imgs_frd[:, 1:4]
@@ -403,7 +304,7 @@ def evaluate(args):
             feats_pts = extract_pts_feats(point_clouds / DATASET_MAX_DEPTH)
         gen_set["pts_feats"].append(feats_pts.cpu())
 
-    if cfg.data['train_reflectance']:
+    if cfg.data["train_reflectance"]:
         gen_set["img_feats"] = torch.cat(gen_set["img_feats"], dim=0).numpy()
     gen_set["pts_feats"] = torch.cat(gen_set["pts_feats"], dim=0).numpy()
     gen_set["bev_hists"] = torch.stack(gen_set["bev_hists"], dim=0).numpy()
@@ -415,20 +316,16 @@ def evaluate(args):
     # =====================================================
     torch.cuda.empty_cache()
 
-    if cfg.data['train_reflectance']:
+    if cfg.data["train_reflectance"]:
         results["img"]["frechet_distance"] = distribution.compute_frechet_distance(
             real_set["img_feats"], gen_set["img_feats"]
         )
-        results["img"]["squared_mmd"] = distribution.compute_squared_mmd(
-            real_set["img_feats"], gen_set["img_feats"]
-        )
+        results["img"]["squared_mmd"] = distribution.compute_squared_mmd(real_set["img_feats"], gen_set["img_feats"])
 
     results["pts"]["frechet_distance"] = distribution.compute_frechet_distance(
         real_set["pts_feats"], gen_set["pts_feats"]
     )
-    results["pts"]["squared_mmd"] = distribution.compute_squared_mmd(
-        real_set["pts_feats"], gen_set["pts_feats"]
-    )
+    results["pts"]["squared_mmd"] = distribution.compute_squared_mmd(real_set["pts_feats"], gen_set["pts_feats"])
 
     perm = list(range(len(real_set["bev_hists"])))
     random.Random(0).shuffle(perm)
@@ -447,13 +344,12 @@ def evaluate(args):
     print(results)
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=Path, default='/path_to/diffusion_steps.pth')
-    parser.add_argument("--sample_dir", type=str, default='/path_to/results')
+    parser.add_argument("--ckpt", type=Path, default="/path_to/diffusion_steps.pth")
+    parser.add_argument("--sample_dir", type=str, default="/path_to/results")
     parser.add_argument("--dataset", choices=["train", "test", "all"], default="all")
-    parser.add_argument("--batch_size", type=int, default=8) 
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_workers", type=int, default=4)
     args = parser.parse_args()
     evaluate(args)

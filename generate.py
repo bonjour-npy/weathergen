@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+
 # from models.CLIP.clip import clip
 import einops
 import imageio
@@ -8,12 +9,12 @@ import torch
 import torch.nn.functional as F
 from torchvision.utils import make_grid, save_image
 from tqdm.auto import tqdm
+from utils.stf_dataset import build_stf_loader
 from utils.weather_generate import load_points_as_images, stf_process
 import utils.inference
 import utils.render
 import numpy as np
 import datetime
-
 
 
 def main(args):
@@ -29,9 +30,16 @@ def main(args):
     # =================================================================================
     # Sampling (reverse diffusion)
     # =================================================================================
+    # 以 STFDataset 提供 weather 条件（示例选用 rain）
+    loader = build_stf_loader(weather="rain", batch_size=args.batch_size, num_workers=4, resolution=(64, 1024))
+    batch_2ch = next(iter(loader)).to(args.device)
+    weather = batch_2ch  # ddpm.sample 期望 [-1, 1] 归一化的 2 通道输入
 
-    weather = load_points_as_images(point_path="./KITTI-360/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin", weather_fla="rain")
-    weather = weather.repeat_interleave(args.batch_size, dim=0).to(device=args.device)
+    # weather = load_points_as_images(
+    #     point_path="./KITTI-360/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
+    #     weather_fla="rain",
+    # )
+    # weather = weather.repeat_interleave(args.batch_size, dim=0).to(device=args.device)
 
     xs = ddpm.sample(
         batch_size=args.batch_size,
@@ -39,7 +47,7 @@ def main(args):
         return_all=True,
         weather=weather,
         # weather=text_features,
-        train_model='finetune',
+        train_model="finetune",
         # train_model='train',
     ).clamp(-1, 1)
 
@@ -72,7 +80,6 @@ def main(args):
     img, bev = render(xs[-1])
     save_image(img, "./samples_img.png", nrow=1)
     save_image(bev, "./samples_bev.png", nrow=4)
-
 
 
 if __name__ == "__main__":

@@ -346,8 +346,8 @@ class EfficientUNet(nn.Module):
         self.vae_linear2 = torch.nn.Linear(128, 256)
         self.vae_linear3 = torch.nn.Linear(256, 609)
 
-        # learnable_mask
-        self.mask = nn.Parameter(torch.zeros(1, 2, 64, 1024), requires_grad=True)  # fintune
+        # learnable_mask, a part of MDP
+        self.mask = nn.Parameter(torch.zeros(1, 2, 64, 1024), requires_grad=True)
 
     def forward(
         self,
@@ -450,11 +450,6 @@ class EfficientUNet(nn.Module):
         h = self.out_conv(h)  # B, 64, 64, 1024
         # h here is the predicted noise
 
-        """
-        #codebase 为什么我在使用acceleratee启动使用CUDA加速的训练脚本之后观察到：GPU的利用率时高时低，而且训练时间变得异常之高，这是为什么？我猜是stf数据集读取的问题，每计算一个batch都要进行IO读取？
-        先进行分析并确定到底是不是因为stf数据集要在每个batch加载才导致的GPU利用率时高时低，然后再给出解决方案，经过我的同意再进行应用修改。
-        """
-
         if train_lfa:
             # vae part of LFA
             if train_model == "train":
@@ -537,3 +532,29 @@ class EfficientUNet(nn.Module):
             # h: predicted noise,
             # weather_out: input weather feature for contrastive learning
             return h, weather_out
+
+    # -----------------------------------------------------------------------------
+    # Utilities
+    # -----------------------------------------------------------------------------
+    def set_lfa_mode(self, enabled: bool) -> None:
+        """
+        Best practice for DDP with optional branches: when LFA/VAE is disabled,
+        freeze all VAE parameters so DDP doesn't expect gradients for them.
+
+        Call this BEFORE wrapping with DDP/Accelerate and BEFORE creating the optimizer.
+        """
+        vae_modules = [
+            self.in_conv_vae,
+            self.in_conv_vae2,
+            self.in_conv_vae3,
+            self.encoder_vae,
+            self.vae_mu,
+            self.vae_sigma,
+            self.vae_linear1,
+            self.vae_linear2,
+            self.vae_linear3,
+        ]
+
+        for m in vae_modules:
+            for p in m.parameters():
+                p.requires_grad = enabled

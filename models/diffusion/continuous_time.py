@@ -49,12 +49,8 @@ def _log_snr_schedule_cosine_interpolated(
     logsnr_min: float = -15,
     logsnr_max: float = 15,
 ) -> torch.Tensor:
-    logsnr_low = _log_snr_schedule_cosine_shifted(
-        t, image_d, noise_d_low, logsnr_min, logsnr_max
-    )
-    logsnr_high = _log_snr_schedule_cosine_shifted(
-        t, image_d, noise_d_high, logsnr_min, logsnr_max
-    )
+    logsnr_low = _log_snr_schedule_cosine_shifted(t, image_d, noise_d_low, logsnr_min, logsnr_max)
+    logsnr_high = _log_snr_schedule_cosine_shifted(t, image_d, noise_d_high, logsnr_min, logsnr_max)
     return t * logsnr_low + (1 - t) * logsnr_high
 
 
@@ -74,9 +70,7 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
         model: nn.Module,
         prediction_type: Literal["eps", "v", "x_0"] = "eps",
         loss_type: Literal["l2", "l1", "huber"] | nn.Module = "l2",
-        noise_schedule: Literal[
-            "linear", "cosine", "cosine_shifted", "cosine_interpolated"
-        ] = "cosine",
+        noise_schedule: Literal["linear", "cosine", "cosine_shifted", "cosine_interpolated"] = "cosine",
         min_snr_loss_weight: bool = True,
         min_snr_gamma: float = 5.0,
         sampling_resolution: tuple[int, int] | None = None,
@@ -116,11 +110,7 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
                 noise_d=self.noise_d_low,
             )
         elif self.noise_schedule == "cosine_interpolated":
-            assert (
-                self.image_d is not None
-                and self.noise_d_low is not None
-                and self.noise_d_high is not None
-            )
+            assert self.image_d is not None and self.noise_d_low is not None and self.noise_d_high is not None
             self.log_snr = partial(
                 _log_snr_schedule_cosine_interpolated,
                 image_d=self.image_d,
@@ -206,7 +196,10 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
         alpha_t, sigma_t = _log_snr_to_alpha_sigma(log_snr_t)
         alpha_s, sigma_s = _log_snr_to_alpha_sigma(log_snr_s)
         x_condition = weather
-        prediction, weather_out, domain_1, domain_2 = self.model(x_t, log_snr_t[:, 0, 0, 0], x_condition, weather, alpha_t, sigma_t, train_model)
+        # 采样阶段不进行 LFA 分支
+        prediction, weather_out = self.model(
+            x_t, log_snr_t[:, 0, 0, 0], x_condition, weather, alpha_t, sigma_t, train_model, False
+        )
         if self.objective == "eps":
             x_0 = (x_t - sigma_t * prediction) / alpha_t
         elif self.objective == "v":
@@ -277,9 +270,7 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
         if return_all:
             out = [x_t]
 
-        for i in tqdm(
-            range(num_steps), desc="RePaint", leave=False, disable=not progress
-        ):
+        for i in tqdm(range(num_steps), desc="RePaint", leave=False, disable=not progress):
             for j in range(num_resample_steps):
                 step_t = steps[:, [i]]
                 step_s = steps[:, [i + 1]]

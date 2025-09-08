@@ -33,10 +33,10 @@ class DiffusionConfig:
 
 @dataclasses.dataclass
 class TrainingConfig:
-    batch_size_train: int = 8  # 16
-    batch_size_eval: int = 2  # 4
-    # batch_size_train: int = 16
-    # batch_size_eval: int = 4
+    # batch_size_train: int = 8  # 16
+    # batch_size_eval: int = 2  # 4
+    batch_size_train: int = 16
+    batch_size_eval: int = 4
     num_workers: int = 16  # os.cpu_count() = 112
     num_steps: int = 300_000  # fine-tune 100_000 (I GUESS)
     steps_save_image: int = 50_000  # 50_000
@@ -54,6 +54,8 @@ class TrainingConfig:
     dynamo_backend: str = None  # "inductor"
     output_dir: str = "logs/diffusion"
     seed: int = 0
+    # train or finetune
+    train_model: Literal["train", "finetune"] = "train"
 
 
 @dataclasses.dataclass

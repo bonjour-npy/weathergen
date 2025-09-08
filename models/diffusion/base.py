@@ -127,6 +127,7 @@ class GaussianDiffusion(nn.Module):
         weather: torch.Tensor,
         steps: torch.Tensor,
         train_model: str,
+        train_lfa: bool,
         loss_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
@@ -142,9 +143,12 @@ class GaussianDiffusion(nn.Module):
         condition = self.get_network_condition(steps)
 
         # 实际计算定义在 efficient_unet 中
-        prediction, weather_out, domain_1, domain_2 = self.model(
-            x_t, condition, x_condition, weather, alpha, sigma, train_model
-        )
+        if train_lfa:
+            prediction, weather_out, domain_1, domain_2 = self.model(
+                x_t, condition, x_condition, weather, alpha, sigma, train_model, True
+            )
+        else:
+            prediction, weather_out = self.model(x_t, condition, x_condition, weather, alpha, sigma, train_model, False)
 
         # gt
         target = self.get_target(x_0, steps, noise)
@@ -158,11 +162,11 @@ class GaussianDiffusion(nn.Module):
             weather_out.softmax(-1).log(),
             text[4].unsqueeze(0).repeat_interleave(prediction.shape[0], dim=0).softmax(-1),
         )
-        loss_domain = self.kl(domain_1.softmax(-1).log(), domain_2.softmax(-1))
-        # loss_domain = (self.criterion(domain_1, domain_2) * self.get_loss_weight(steps)).mean()
-        # ablation study: without LFA
-        loss = loss + loss_control + 0 * loss_domain
-        # loss = loss + loss_control + loss_domain
+        if train_lfa:
+            loss_domain = self.kl(domain_1.softmax(-1).log(), domain_2.softmax(-1))
+            loss = loss + loss_control + loss_domain
+        else:
+            loss = loss + loss_control
         return loss
 
     def forward(
@@ -172,11 +176,12 @@ class GaussianDiffusion(nn.Module):
         text: torch.Tensor,
         weather: torch.Tensor,
         train_model: str,
+        train_lfa: bool,
         loss_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # shared in continuous/discrete versions
         steps = self.sample_timesteps(x_0.shape[0], x_0.device)
-        loss = self.p_loss(x_0, x_condition, text, weather, steps, train_model, loss_mask)
+        loss = self.p_loss(x_0, x_condition, text, weather, steps, train_model, train_lfa, loss_mask)
         return loss
 
     @torch.inference_mode()
