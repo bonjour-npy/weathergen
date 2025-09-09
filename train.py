@@ -15,14 +15,13 @@ import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
 
-# from accelerate.utils import DistributedDataParallelKwargs
 from ema_pytorch import EMA
 from rich import print
 from simple_parsing import ArgumentParser
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from utils.weather import weather_process, stf_process
+from utils.weather import weather_process
 from utils.stf_dataset import build_stf_loader
 import utils.inference
 import utils.option
@@ -52,7 +51,6 @@ def train(cfg: utils.option.Config):
     # Initialize accelerator
     # =================================================================================
 
-    # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
         mixed_precision=cfg.training.mixed_precision,
@@ -61,7 +59,7 @@ def train(cfg: utils.option.Config):
         dynamo_backend=cfg.training.dynamo_backend,
         split_batches=True,
         step_scheduler_with_optimizer=True,
-        # kwargs_handlers=[ddp_kwargs],
+        # sync_bn=True,
     )
     if accelerator.is_main_process:
         print(cfg)
@@ -170,14 +168,22 @@ def train(cfg: utils.option.Config):
         )
         ddpm_ema.to(device)
 
-    lidar_utils = LiDARUtility(
+    # CPU 版用于 DataLoader 的 collate_fn，避免在 worker 进程中触碰 CUDA 张量
+    lidar_utils_cpu = LiDARUtility(
         resolution=cfg.data.resolution,
         depth_format=cfg.data.depth_format,
         min_depth=cfg.data.min_depth,
         max_depth=cfg.data.max_depth,
         ray_angles=ddpm.model.coords,
     )
-    lidar_utils.to(device)
+    # GPU/设备版用于训练阶段的渲染/日志
+    lidar_utils = LiDARUtility(
+        resolution=cfg.data.resolution,
+        depth_format=cfg.data.depth_format,
+        min_depth=cfg.data.min_depth,
+        max_depth=cfg.data.max_depth,
+        ray_angles=ddpm.model.coords,
+    ).to(device)
 
     # =================================================================================
     # Setup optimizer & dataloader
@@ -196,10 +202,56 @@ def train(cfg: utils.option.Config):
         name=cfg.data.projection,
         split=ds.Split.TRAIN,
         num_proc=cfg.training.num_workers,
+        trust_remote_code=True,
     ).with_format("torch")
 
     if accelerator.is_main_process:
         print(dataset)
+
+    # 将预处理与天气增强搬到 DataLoader 的 collate_fn，避免在训练循环中逐 batch 处理
+    def _kitti360_collate(samples):
+        # stack 原始字段（仅保留必要字段）
+        depth = torch.stack([s["depth"] for s in samples], dim=0)  # (B, 1, H, W)
+        reflectance = None
+        if cfg.data.train_reflectance:
+            reflectance = torch.stack([s["reflectance"] for s in samples], dim=0)  # (B, 1, H, W)
+        xyz = torch.stack([s["xyz"] for s in samples], dim=0)  # (B, 3, H, W)
+
+        # 在 CPU 上完成与 preprocess 等价的操作
+        x_parts = []
+        if cfg.data.train_depth:
+            x_parts.append(lidar_utils_cpu.convert_depth(depth))
+        if cfg.data.train_reflectance and reflectance is not None:
+            x_parts.append(reflectance)
+        x = torch.cat(x_parts, dim=1)
+        x = lidar_utils_cpu.normalize(x)
+        x = F.interpolate(x, size=cfg.data.resolution, mode="nearest-exact")
+
+        # 为整个 batch 随机选择同一种天气（与原训练循环一致）
+        q = np.random.randint(0, 4)
+        if q == 0:
+            weather_flag = "normal"
+        elif q == 1:
+            weather_flag = "fog"
+        elif q == 2:
+            weather_flag = "snow"
+        else:
+            weather_flag = "rain"
+
+        # 在 CPU 上应用天气增强（保持与原 weather_process 语义一致）
+        x_0 = weather_process(x, weather_flag, xyz, depth)
+
+        return {
+            "x_0": x_0,  # (B,C,H,W)
+            "weather_flag": weather_flag,
+        }
+
+    def _worker_init_fn(worker_id: int):
+        try:
+            base_seed = torch.initial_seed() % 2**32
+        except Exception:
+            base_seed = np.random.SeedSequence().entropy
+        np.random.seed((base_seed + worker_id) % (2**32 - 1))
 
     dataloader = DataLoader(
         dataset,
@@ -208,6 +260,8 @@ def train(cfg: utils.option.Config):
         num_workers=cfg.training.num_workers,
         drop_last=True,
         pin_memory=True,
+        collate_fn=_kitti360_collate,
+        worker_init_fn=_worker_init_fn,
     )
 
     lr_scheduler = utils.training.get_cosine_schedule_with_warmup(
@@ -237,22 +291,10 @@ def train(cfg: utils.option.Config):
             num_workers=cfg.training.num_workers,
             resolution=cfg.data.resolution,
         )
-        (
-            ddpm,
-            optimizer,
-            dataloader,
-            lr_scheduler,
-            stf_fog_loader,
-            stf_snow_loader,
-            stf_rain_loader,
-        ) = accelerator.prepare(
-            ddpm,
-            optimizer,
-            dataloader,
-            lr_scheduler,
-            stf_fog_loader,
-            stf_snow_loader,
-            stf_rain_loader,
+        ddpm, optimizer, dataloader, lr_scheduler, stf_fog_loader, stf_snow_loader, stf_rain_loader = (
+            accelerator.prepare(
+                ddpm, optimizer, dataloader, lr_scheduler, stf_fog_loader, stf_snow_loader, stf_rain_loader
+            )
         )
 
         def _infinite(loader):
@@ -357,14 +399,19 @@ def train(cfg: utils.option.Config):
     text_emb = clip.tokenize(text).to(device)
     with torch.no_grad():
         text_features = clip_model.encode_text(text_emb)  # B, 512
+
     global_step = 0
     while global_step < cfg.training.num_steps:
         ddpm.train()
 
-        for batch in dataloader:  # 每个 batch 输入时单独进行天气处理
-            x_0 = preprocess(batch)  # B, 2, 64, 1024
-            weather_flag = random_select()
-            x_0 = weather_process(x_0, weather_flag, batch["xyz"], batch["depth"])
+        # for batch in dataloader:  # 每个 batch 输入时单独进行天气处理
+        #     x_0 = preprocess(batch)  # B, 2, 64, 1024
+        #     weather_flag = random_select()
+        #     x_0 = weather_process(x_0, weather_flag, batch["xyz"], batch["depth"])
+        for batch in dataloader:
+            # 重写 kitti_360 的 dataloader 的 collate_fn 方法，完成 preprocess + MDP 模拟
+            x_0 = batch["x_0"].to(device, non_blocking=True)
+            weather_flag = batch["weather_flag"]
 
             if weather_flag == "normal":
                 text_features = torch.cat([text_features, text_features[0].unsqueeze(0)], dim=0)
@@ -375,7 +422,7 @@ def train(cfg: utils.option.Config):
             if weather_flag == "fog":
                 text_features = torch.cat([text_features, text_features[1].unsqueeze(0)], dim=0)
                 if need_stf:
-                    # 由 DataLoader 预取，避免在线 I/O 与投影阻塞
+                    # 由 DataLoader 预取，避免在线 I/O
                     x_weather = next(stf_iters["fog"]).to(device, non_blocking=True)
 
             if weather_flag == "snow":
@@ -446,12 +493,18 @@ def train(cfg: utils.option.Config):
                 if global_step % cfg.training.steps_save_image == 0:
                     print(weather_flag)
                     ddpm_ema.ema_model.eval()
+                    # 对齐采样条件的 batch 维度
+                    weather_for_sampling = (
+                        x_0[: cfg.training.batch_size_eval]
+                        if x_0.shape[0] >= cfg.training.batch_size_eval
+                        else x_0.repeat_interleave(cfg.training.batch_size_eval, dim=0)
+                    )
                     sample = ddpm_ema.ema_model.sample(
                         batch_size=cfg.training.batch_size_eval,
                         num_steps=cfg.diffusion.num_sampling_steps,
-                        rng=torch.Generator(device=device).manual_seed(0),
-                        weather=x_0,
-                        train_model="train",
+                        rng=torch.Generator(device=device).manual_seed(42),
+                        weather=weather_for_sampling,  # weather condition
+                        train_model="train",  # 采样时使用 train 模式以启用 MDP
                     )
                     log_images(sample, "sample", global_step)
 

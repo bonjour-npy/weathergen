@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+
 # import utils.inference
 import utils.render
 import einops
@@ -16,9 +17,8 @@ import matplotlib.pyplot as plt
 
 rng = np.random.default_rng(seed=42)
 
-def get_hdl64e_linear_ray_angles(
-    HH: int = 64, WW: int = 1024, device: torch.device = "cpu"
-):
+
+def get_hdl64e_linear_ray_angles(HH: int = 64, WW: int = 1024, device: torch.device = "cpu"):
     h_up, h_down = 3, -25
     w_left, w_right = 180, -180
     elevation = 1 - torch.arange(HH, device=device) / HH  # [0, 1]
@@ -28,6 +28,7 @@ def get_hdl64e_linear_ray_angles(
     [elevation, azimuth] = torch.meshgrid([elevation, azimuth], indexing="ij")
     angles = torch.stack([elevation, azimuth])[None].deg2rad()
     return angles
+
 
 class LiDARUtility(nn.Module):
     def __init__(
@@ -129,6 +130,7 @@ class LiDARUtility(nn.Module):
         return mask.float()
         # return mask
 
+
 lidar_utils = LiDARUtility(
     resolution=(64, 1024),
     image_format="log_depth",
@@ -136,6 +138,7 @@ lidar_utils = LiDARUtility(
     max_depth=80.0,
     ray_angles=None,
 )
+
 
 def scatter(array, index, value):
     for (h, w), v in zip(index, value):
@@ -151,9 +154,11 @@ def preprocess(xyzrdm):
     x = lidar_utils.normalize(x)
     return x
 
+
 def r2p(x):
     xyz = lidar_utils.to_xyz(x[[0]].unsqueeze(dim=0) * lidar_utils.max_depth)
     return xyz
+
 
 def load_points_as_images(
     point_path: str,
@@ -161,8 +166,8 @@ def load_points_as_images(
     scan_unfolding: bool = False,
     H: int = 64,
     W: int = 1024,
-    min_depth: float = 1.45, # 1.45
-    max_depth: float = 80, # 80.0
+    min_depth: float = 1.45,  # 1.45
+    max_depth: float = 80,  # 80.0
 ):
     if weather_fla == "normal":
         points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 4))
@@ -197,7 +202,7 @@ def load_points_as_images(
         x = preprocess(xyzrdm)
 
         xs = x
-    
+
     if weather_fla == "wet_ground":
         points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 4))
         points = points[:, :4]
@@ -229,7 +234,7 @@ def load_points_as_images(
         xyzrdm *= xyzrdm[[5]]
         xyzrdm = torch.from_numpy(xyzrdm)
         x = preprocess(xyzrdm)
-    
+
         height = xyzrdm[[2]].squeeze()
         depth = xyzrdm[[4]].squeeze() / lidar_utils.max_depth
         zeros = torch.zeros(H, W)
@@ -240,7 +245,7 @@ def load_points_as_images(
         mask_2 = torch.where(depth > 0.06, zeros, ones) * mask_mask_1 * mask_mask_2
         mask = mask_1 + mask_2
         xs = mask * x + (1 - mask) * -1
-    
+
     if weather_fla == "rain":
         points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 4))
         points = points[:, :4]
@@ -320,8 +325,8 @@ def load_points_as_images(
         grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
 
         # horizontal grid
-        azimuth = -np.arctan2(y, x)  # [-pi,pi]
-        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
+        azimuth = -np.arctan2(y, x)  # [-pi, pi]
+        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0, 1]
         grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
 
         grid = np.concatenate((grid_h, grid_w), axis=1)
@@ -337,8 +342,8 @@ def load_points_as_images(
         xs = lidar_utils.denormalize(x)
         xs[[0]] = lidar_utils.revert_depth(xs[[0]]) / lidar_utils.max_depth
 
-        new_xyz = r2p(xs) # new_xyz [1, 3, 64, 1024]
-        new_xyz = einops.rearrange(new_xyz, "B C H W -> B (H W) C").squeeze().numpy() # new_xyz (65536, 3)
+        new_xyz = r2p(xs)  # new_xyz [1, 3, 64, 1024]
+        new_xyz = einops.rearrange(new_xyz, "B C H W -> B (H W) C").squeeze().numpy()  # new_xyz (65536, 3)
 
         x_multi = np.random.random(1000)
         y_multi = np.random.random(1000)
@@ -364,8 +369,8 @@ def load_points_as_images(
         grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
 
         # horizontal grid
-        azimuth = -np.arctan2(y, x)  # [-pi,pi]
-        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
+        azimuth = -np.arctan2(y, x)  # [-pi, pi]
+        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0, 1]
         grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
 
         grid = np.concatenate((grid_h, grid_w), axis=1)
@@ -388,11 +393,11 @@ def load_points_as_images(
         mask_mask_3 = torch.empty(H, 1).bernoulli_(0.55)
         noise = ones * 0.005
         noise = torch.where(depth < 0.23, noise, zeros) * mask_mask_noise
-        
+
         mask_mask_atten = torch.empty(H, W).bernoulli_(0.8)
         fog_atten_out = torch.where(depth > 0.03, ones, zeros) * mask_mask_atten
         fog_atten_in = torch.where(depth < 0.03, ones, zeros)
-        mask = fog_atten_out +  fog_atten_in
+        mask = fog_atten_out + fog_atten_in
         xs = mask * x + (1 - mask) * -1
 
         mask_1 = torch.where(depth > 0.24, zeros, ones)
@@ -400,7 +405,7 @@ def load_points_as_images(
         mask = mask_1 + mask_2
         xs[[0]] = noise + xs[[0]]
         xs = mask * xs + (1 - mask) * -1
-    
+
     if weather_fla == "snow":
         points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 4))
         points = points[:, :4]
@@ -418,8 +423,8 @@ def load_points_as_images(
         grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
 
         # horizontal grid
-        azimuth = -np.arctan2(y, x)  # [-pi,pi]
-        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
+        azimuth = -np.arctan2(y, x)  # [-pi, pi]
+        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0, 1]
         grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
 
         grid = np.concatenate((grid_h, grid_w), axis=1)
@@ -437,8 +442,8 @@ def load_points_as_images(
 
         ######################## already processed by dataloader ##########################
 
-        new_xyz = r2p(xs) # new_xyz [1, 3, 64, 1024]
-        new_xyz = einops.rearrange(new_xyz, "B C H W -> B (H W) C").squeeze().numpy() # new_xyz (65536, 3)
+        new_xyz = r2p(xs)  # new_xyz [1, 3, 64, 1024]
+        new_xyz = einops.rearrange(new_xyz, "B C H W -> B (H W) C").squeeze().numpy()  # new_xyz (65536, 3)
 
         x_multi = np.random.random(1800)
         y_multi = np.random.random(1800)
@@ -464,8 +469,8 @@ def load_points_as_images(
         grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
 
         # horizontal grid
-        azimuth = -np.arctan2(y, x)  # [-pi,pi]
-        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
+        azimuth = -np.arctan2(y, x)  # [-pi, pi]
+        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0, 1]
         grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
 
         grid = np.concatenate((grid_h, grid_w), axis=1)
@@ -491,20 +496,59 @@ def load_points_as_images(
         mask = mask_1
         x[[0]] = noise + x[[0]]
         xs = mask * x + (1 - mask) * -1
-    
+
     return xs.unsqueeze(dim=0)
 
+
 #########################################################################
+
 
 def stf_process(weather_flag: str):
     H = 64
     W = 1024
     x_weather = torch.empty(1, 2, H, W)
-    if weather_flag == 'snow':
-        all_point_path = np.genfromtxt('./seeingthroughfog/snow_day.txt', dtype='U', delimiter='\n')
+    if weather_flag == "snow":
+        all_point_path = np.genfromtxt("./seeingthroughfog/snow_day.txt", dtype="U", delimiter="\n")
         selected_path = np.random.choice(all_point_path, size=1, replace=False)
 
-        point_path = Path('./seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[0] + '.bin')
+        point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[0] + ".bin")
+        points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
+        points = points[:, :4]
+        xyz = points[:, :3]  # xyz
+        x = xyz[:, [0]]
+        y = xyz[:, [1]]
+        z = xyz[:, [2]]
+        depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
+        mask = (depth >= 1.45) & (depth <= 80)
+        points = np.concatenate([points, depth, mask], axis=1)
+
+        h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
+        elevation = np.arcsin(z / depth) + abs(h_down)
+        grid_h = 1 - elevation / (h_up - h_down)
+        grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
+
+        # horizontal grid
+        azimuth = -np.arctan2(y, x)  # [-pi, pi]
+        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0, 1]
+        grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
+
+        grid = np.concatenate((grid_h, grid_w), axis=1)
+
+        # projection
+        order = np.argsort(-depth.squeeze(1))
+        proj_points = np.zeros((H, W, 4 + 2), dtype=points.dtype)
+        proj_points = scatter(proj_points, grid[order], points[order]).astype(np.float32)
+        xyzrdm = proj_points.transpose(2, 0, 1)
+        xyzrdm *= xyzrdm[[5]]
+        xyzrdm = torch.from_numpy(xyzrdm)
+        x = preprocess(xyzrdm)
+        x_weather[0] = x
+
+    if weather_flag == "rain":
+        all_point_path = np.genfromtxt("./seeingthroughfog/rain.txt", dtype="U", delimiter="\n")
+        selected_path = np.random.choice(all_point_path, size=1, replace=False)
+
+        point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[0] + ".bin")
         points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
         points = points[:, :4]
         xyz = points[:, :3]  # xyz
@@ -537,47 +581,12 @@ def stf_process(weather_flag: str):
         x = preprocess(xyzrdm)
         x_weather[0] = x
 
-    if weather_flag == 'rain':
-        all_point_path = np.genfromtxt('./seeingthroughfog/rain.txt', dtype='U', delimiter='\n')
+    if weather_flag == "fog":
+        all_point_path = np.genfromtxt("./seeingthroughfog/dense_fog_day.txt", dtype="U", delimiter="\n")
         selected_path = np.random.choice(all_point_path, size=1, replace=False)
-
-        point_path = Path('./seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[0] + '.bin')
-        points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
-        points = points[:, :4]
-        xyz = points[:, :3]  # xyz
-        x = xyz[:, [0]]
-        y = xyz[:, [1]]
-        z = xyz[:, [2]]
-        depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
-        mask = (depth >= 1.45) & (depth <= 80)
-        points = np.concatenate([points, depth, mask], axis=1)
-
-        h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
-        elevation = np.arcsin(z / depth) + abs(h_down)
-        grid_h = 1 - elevation / (h_up - h_down)
-        grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
-
-        # horizontal grid
-        azimuth = -np.arctan2(y, x)  # [-pi,pi]
-        grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
-        grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
-
-        grid = np.concatenate((grid_h, grid_w), axis=1)
-
-        # projection
-        order = np.argsort(-depth.squeeze(1))
-        proj_points = np.zeros((H, W, 4 + 2), dtype=points.dtype)
-        proj_points = scatter(proj_points, grid[order], points[order]).astype(np.float32)
-        xyzrdm = proj_points.transpose(2, 0, 1)
-        xyzrdm *= xyzrdm[[5]]
-        xyzrdm = torch.from_numpy(xyzrdm)
-        x = preprocess(xyzrdm)
-        x_weather[0] = x
-    
-    if weather_flag == 'fog':
-        all_point_path = np.genfromtxt('./seeingthroughfog/dense_fog_day.txt', dtype='U', delimiter='\n')
-        selected_path = np.random.choice(all_point_path, size=1, replace=False)
-        point_path = Path('/opt/data/private/seeingthroughfog/lidar_hdl64_strongest/') / (selected_path[0] + '.bin')
+        point_path = Path("/opt/data/private/seeingthroughfog/lidar_hdl64_strongest/") / (
+            selected_path[0] + ".bin"
+        )
         points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
         points = points[:, :4]
         xyz = points[:, :3]  # xyz

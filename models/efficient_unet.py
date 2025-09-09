@@ -351,9 +351,9 @@ class EfficientUNet(nn.Module):
 
     def forward(
         self,
-        images: torch.Tensor,
+        images: torch.Tensor,  # 可能是带噪声的 x_t
         timesteps: torch.Tensor,
-        images_condition: torch.Tensor,  # condition input for CLC
+        images_condition: torch.Tensor,  # CLC 的 x_0 输入
         weather: torch.Tensor,  # stf input for LFA
         alpha: torch.Tensor,
         sigma: torch.Tensor,

@@ -185,7 +185,7 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
         x_t: torch.Tensor,
         step_t: torch.Tensor,
         step_s: torch.Tensor,
-        weather: torch.Tensor,
+        weather: torch.Tensor,  # not from stf dataset
         train_model: str,
         rng: List[torch.Generator] | torch.Generator | None = None,
         mode: Literal["ddpm", "ddim"] = "ddpm",
@@ -196,6 +196,10 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
         alpha_t, sigma_t = _log_snr_to_alpha_sigma(log_snr_t)
         alpha_s, sigma_s = _log_snr_to_alpha_sigma(log_snr_s)
         x_condition = weather
+        if x_condition.shape[0] != x_t.shape[0]:
+            raise ValueError(
+                f"Batch size of weather condition {x_condition.shape[0]} does not match that of x_t {x_t.shape[0]}"
+            )
         # 采样阶段不进行 LFA 分支
         prediction, weather_out = self.model(
             x_t, log_snr_t[:, 0, 0, 0], x_condition, weather, alpha_t, sigma_t, train_model, False
@@ -226,7 +230,7 @@ class ContinuousTimeGaussianDiffusion(base.GaussianDiffusion):
         self,
         batch_size: int,
         num_steps: int,
-        weather: torch.Tensor,
+        weather: torch.Tensor,  # not from stf dataset
         train_model: str,
         progress: bool = True,
         rng: list[torch.Generator] | torch.Generator | None = None,

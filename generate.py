@@ -30,11 +30,15 @@ def main(args):
     # =================================================================================
     # Sampling (reverse diffusion)
     # =================================================================================
+    # 这里是错的，不因该用 stf 数据集提供天气条件
     # 以 STFDataset 提供 weather 条件（示例选用 rain）
-    loader = build_stf_loader(weather="rain", batch_size=args.batch_size, num_workers=4, resolution=(64, 1024))
+    loader = build_stf_loader(
+        weather="rain", batch_size=args.batch_size, num_workers=4, resolution=(64, 1024)
+    )
     batch_2ch = next(iter(loader)).to(args.device)
     weather = batch_2ch  # ddpm.sample 期望 [-1, 1] 归一化的 2 通道输入
 
+    # 加载 kitti_360 数据集之后通过 weather_flag 进行 MDP 增强
     # weather = load_points_as_images(
     #     point_path="./KITTI-360/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
     #     weather_fla="rain",
