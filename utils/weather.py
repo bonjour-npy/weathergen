@@ -465,7 +465,7 @@ def stf_process(weather_flag: str, x_0: torch.Tensor):
             x_weather[i] = x
 
     if weather_flag == "rain":
-        all_point_path = np.genfromtxt("/./seeingthroughfog/rain.txt", dtype="U", delimiter="\n")
+        all_point_path = np.genfromtxt("./seeingthroughfog/rain.txt", dtype="U", delimiter="\n")
         selected_path = np.random.choice(all_point_path, size=B, replace=False)
         for i in range(B):
             point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[i] + ".bin")

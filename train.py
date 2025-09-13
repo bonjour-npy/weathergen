@@ -35,6 +35,8 @@ from models.efficient_unet import EfficientUNet  # With Mamba
 from models.refinenet import LiDARGenRefineNet
 from utils.lidar import LiDARUtility, get_hdl64e_linear_ray_angles
 
+from rich import print
+
 # debug
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -121,16 +123,6 @@ def train(cfg: utils.option.Config):
     if accelerator.is_main_process:
         print(f"number of parameters: {utils.inference.count_parameters(model):,}")
 
-    # Freeze optional LFA/VAE branch when disabled to avoid DDP unused-params
-    # errors and unnecessary computation. Must be done BEFORE optimizer/DDP.
-    # Only applies to EfficientUNet which defines set_lfa_mode.
-    try:
-        if hasattr(model, "set_lfa_mode"):
-            model.set_lfa_mode(bool(cfg.model.lfa))
-    except Exception as e:
-        if accelerator.is_main_process:
-            print(f"[warn] set_lfa_mode failed: {e}")
-
     if cfg.diffusion.timestep_type == "discrete":
         ddpm = DiscreteTimeGaussianDiffusion(
             model=model,
@@ -151,8 +143,46 @@ def train(cfg: utils.option.Config):
     else:
         raise ValueError(f"Unknown: {cfg.diffusion.timestep_type}")
 
-    # fine-tuning
-    # ddpm = utils.inference.load_model('/path_to/diffusion_steps.pth', device='cuda')
+    # Load pretrained weights for fine-tuning
+    if cfg.training.train_model == "finetune":
+        checkpoint_path = (
+            "logs/diffusion/kitti_360/spherical-1024/20250910T125905/models/diffusion_0000300000.pth"
+        )
+
+        with accelerator.main_process_first():
+            if accelerator.is_main_process:
+                print(f"Loading checkpoint from {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+        ddpm.load_state_dict(checkpoint["weights"])
+
+        accelerator.wait_for_everyone()
+
+        if accelerator.is_main_process:
+            print("Checkpoint loaded successfully across all processes")
+
+    # ------------------------------------------------------------------------------------------------ #
+    # Load pretrained weights for fine-tuning
+    # if cfg.training.train_model == "finetune":
+    #     ddpm = utils.inference.load_model(
+    #         "logs/diffusion/kitti_360/spherical-1024/20250910T125905/models/diffusion_0000300000.pth",
+    #         device=device,
+    #     )
+
+    #     # 重新设置 coords 与 LFA 冻结状态
+    #     # if "spherical" in cfg.data.projection:
+    #     #     ddpm.model.coords = get_hdl64e_linear_ray_angles(*cfg.data.resolution)
+    #     # elif "unfolding" in cfg.data.projection:
+    #     #     ddpm.model.coords = F.interpolate(
+    #     #         torch.load(f"data/{cfg.data.dataset}/unfolding_angles.pth"),
+    #     #         size=cfg.data.resolution,
+    #     #         mode="nearest-exact",
+    #     #     )
+    # ------------------------------------------------------------------------------------------------ #
+
+    # 冻结 / 解冻 LFA (VAE) 支路，避免 DDP 未用参数错误
+    if hasattr(ddpm.model, "set_lfa_mode"):
+        ddpm.model.set_lfa_mode(bool(cfg.model.lfa))
 
     ddpm.train()
     ddpm.to(device)
@@ -176,7 +206,7 @@ def train(cfg: utils.option.Config):
         max_depth=cfg.data.max_depth,
         ray_angles=ddpm.model.coords,
     )
-    # GPU/设备版用于训练阶段的渲染/日志
+    # GPU 版用于训练阶段的渲染和日志
     lidar_utils = LiDARUtility(
         resolution=cfg.data.resolution,
         depth_format=cfg.data.depth_format,
@@ -208,7 +238,7 @@ def train(cfg: utils.option.Config):
     if accelerator.is_main_process:
         print(dataset)
 
-    # 将预处理与天气增强搬到 DataLoader 的 collate_fn，避免在训练循环中逐 batch 处理
+    # 将预处理与 MDP 封装成 DataLoader 的 collate_fn，避免在训练循环中逐 batch 处理
     def _kitti360_collate(samples):
         # stack 原始字段（仅保留必要字段）
         depth = torch.stack([s["depth"] for s in samples], dim=0)  # (B, 1, H, W)
@@ -258,6 +288,7 @@ def train(cfg: utils.option.Config):
         batch_size=cfg.training.batch_size_train,
         shuffle=True,
         num_workers=cfg.training.num_workers,
+        # num_workers=0,
         drop_last=True,
         pin_memory=True,
         collate_fn=_kitti360_collate,
@@ -335,19 +366,6 @@ def train(cfg: utils.option.Config):
         )
         return x
 
-    # 随即筛选天气
-    def random_select():
-        Q = np.random.randint(0, 4)
-        if Q == 0:
-            weather_flag = "normal"
-        if Q == 1:
-            weather_flag = "fog"
-        if Q == 2:
-            weather_flag = "snow"
-        if Q == 3:
-            weather_flag = "rain"
-        return weather_flag
-
     def split_channels(image: torch.Tensor):
         depth, rflct = torch.split(image, channels, dim=1)
         return depth, rflct
@@ -415,7 +433,6 @@ def train(cfg: utils.option.Config):
 
             if weather_flag == "normal":
                 text_features = torch.cat([text_features, text_features[0].unsqueeze(0)], dim=0)
-                # 正常天气下微调时也不用加载 stf 数据集
                 if need_stf:
                     x_weather = x_0
 
@@ -437,7 +454,7 @@ def train(cfg: utils.option.Config):
 
             with accelerator.accumulate(ddpm):
                 """
-                # from GitHub
+                # from original code
                 loss = ddpm(x_0=x_0, x_condition=x_0, text=text_features, weather=x_weather, train_model='train')
                 # fine-tune
                 # loss = ddpm(x_0=x_weather, x_condition=x_0, text=text_features, weather=x_weather, train_model='finetune')
@@ -486,6 +503,9 @@ def train(cfg: utils.option.Config):
             if accelerator.is_main_process:
                 ddpm_ema.update()
                 log["ema/decay"] = ddpm_ema.get_current_decay()
+
+                # Update progress bar with loss
+                progress_bar.set_postfix(loss=f"{loss.item():.6f}")
 
                 if global_step == 1:
                     log_images(x_0, "image", global_step)

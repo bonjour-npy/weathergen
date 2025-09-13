@@ -88,7 +88,11 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=Path, default="./project/diffusion_steps.pth")
+    parser.add_argument(
+        "--ckpt",
+        type=Path,
+        default="logs/diffusion/kitti_360/spherical-1024/20250910T125905/models/diffusion_0000300000.pth",
+    )
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--sampling_steps", type=int, default=256)

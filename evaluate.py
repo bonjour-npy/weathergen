@@ -214,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample_dir", type=str, default='/opt/data/private/project/points2image/lidm_points')
     # parser.add_argument("--sample_dir", type=str, default='/opt/data/private/project/r2dm-ssm/logs/diffusion/kitti_360/spherical-1024/10.28_4e-4_ft/results')
     parser.add_argument("--dataset", choices=["train", "test", "all"], default="all")
-    parser.add_argument("--batch_size", type=int, default=4) #16
+    parser.add_argument("--batch_size", type=int, default=4)  # 16
     parser.add_argument("--num_workers", type=int, default=4)
     args = parser.parse_args()
     evaluate(args)

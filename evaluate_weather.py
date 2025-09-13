@@ -320,12 +320,16 @@ def evaluate(args):
         results["img"]["frechet_distance"] = distribution.compute_frechet_distance(
             real_set["img_feats"], gen_set["img_feats"]
         )
-        results["img"]["squared_mmd"] = distribution.compute_squared_mmd(real_set["img_feats"], gen_set["img_feats"])
+        results["img"]["squared_mmd"] = distribution.compute_squared_mmd(
+            real_set["img_feats"], gen_set["img_feats"]
+        )
 
     results["pts"]["frechet_distance"] = distribution.compute_frechet_distance(
         real_set["pts_feats"], gen_set["pts_feats"]
     )
-    results["pts"]["squared_mmd"] = distribution.compute_squared_mmd(real_set["pts_feats"], gen_set["pts_feats"])
+    results["pts"]["squared_mmd"] = distribution.compute_squared_mmd(
+        real_set["pts_feats"], gen_set["pts_feats"]
+    )
 
     perm = list(range(len(real_set["bev_hists"])))
     random.Random(0).shuffle(perm)

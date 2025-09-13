@@ -23,10 +23,10 @@ def sample(args):
     ddpm, lidar_utils, cfg = utils.inference.setup_model(args.ckpt)
 
     accelerator = Accelerator(
-        mixed_precision=cfg.training['mixed_precision'],
-        dynamo_backend=cfg.training['dynamo_backend'],
+        mixed_precision=cfg.training["mixed_precision"],
+        dynamo_backend=cfg.training["dynamo_backend"],
         split_batches=True,
-        even_batches=False,
+        # even_batches=False,
         step_scheduler_with_optimizer=True,
     )
     device = accelerator.device
@@ -37,7 +37,7 @@ def sample(args):
     dataloader = DataLoader(
         TensorDataset(torch.arange(args.num_samples).long()),
         batch_size=args.batch_size,
-        num_workers=cfg.training['num_workers'],
+        num_workers=cfg.training["num_workers"],
         drop_last=False,
     )
 
@@ -45,7 +45,18 @@ def sample(args):
     # sample_fn = torch.compile(ddpm.sample)
     lidar_utils, dataloader = accelerator.prepare(lidar_utils, dataloader)
 
-    save_dir = Path(args.output_dir)
+    # redefine output directory
+    if args.output_dir is None:
+        # logs/diffusion/kitti_360/spherical-1024/20250909T154744/models/diffusion_0000060000.pth
+        save_dir = Path(
+            Path(args.ckpt).parent.parent
+            / f"results"
+            / f"{args.ckpt.split('/')[-1].split('.')[0]}"
+            / args.weather_flag
+        )
+    else:
+        save_dir = Path(args.output_dir)
+
     with accelerator.main_process_first():
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -67,17 +78,21 @@ def sample(args):
         else:
             (seeds,) = seeds
 
-        weather = load_points_as_images(point_path="./KITTI-360/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin", weather_fla="snow") # or random select
+        weather = load_points_as_images(
+            # point_path="./KITTI-360/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
+            point_path="data/kitti_360/dataset/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
+            weather_fla=args.weather_flag,
+        )  # or random select
+        # 扩展 weather condition 的 batch 以匹配 sample_batch_size
         weather = weather.repeat_interleave(args.batch_size, dim=0).to(device=device)
         samples = ddpm.sample(
-                batch_size=len(seeds),
-                num_steps=args.num_steps,
-                rng=utils.inference.setup_rng(seeds.cpu().tolist(), device=device),
-                progress=False,
-                weather=weather,
-                train_model='train',
+            batch_size=len(seeds),
+            num_steps=args.num_steps,
+            rng=utils.inference.setup_rng(seeds.cpu().tolist(), device=device),
+            progress=False,
+            weather=weather,
+            train_model="train",  # train 模式来应用 MDP Learnable Mask
         ).clamp(-1, 1)
-
 
         samples = postprocess(samples)
 
@@ -90,9 +105,15 @@ def sample(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--ckpt", type=str, default='./project/diffusion_steps.pth')
-    parser.add_argument("--output_dir", type=str, default='./project/results')
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=f"logs/diffusion/kitti_360/spherical-1024/20250909T154744/models/diffusion_0000060000.pth",
+    )
+    parser.add_argument("--weather_flag", type=str, default=f"snow")  # rain, fog, snow
+    # 默认保存在 ckpt 同级目录的 results-{ckpt}/{args.weather_flag} 下
+    parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_samples", type=int, default=200)
     parser.add_argument("--num_steps", type=int, default=256)
     args = parser.parse_args()

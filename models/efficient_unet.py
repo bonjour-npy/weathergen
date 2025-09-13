@@ -84,7 +84,9 @@ class ResidualBlock(nn.Module):
         self.conv2.apply(ops.zero_out)
 
         # skip connection
-        self.skip = ops.Conv2d(in_channels, out_channels, 1, 1, 0) if in_channels != out_channels else nn.Identity()
+        self.skip = (
+            ops.Conv2d(in_channels, out_channels, 1, 1, 0) if in_channels != out_channels else nn.Identity()
+        )
 
         self.register_buffer("scale", torch.tensor(scale).float())
 
@@ -434,7 +436,7 @@ class EfficientUNet(nn.Module):
         h3 = einops.rearrange(h3, "B C H W -> B C W H")
         h3_2 = self.silu(self.ebn1(self.mamba1(h3)))  # Column-wise Mamba
         # h3_2 = einops.rearrange(h3_2, "B C H W -> B C W H")
-        # coreection
+        # correction
         h3_2 = einops.rearrange(h3_2, "B C W H -> B C H W")
         h3 = h3_1 * 0.5 + h3_2 * 0.5
 
