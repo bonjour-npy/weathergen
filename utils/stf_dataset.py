@@ -40,7 +40,7 @@ def _load_and_project_cached(bin_path: str, H: int, W: int) -> np.ndarray:
 
     depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
     mask = (depth >= 1.45) & (depth <= 80.0)
-    pts = np.concatenate([x, y, z, points[:, [3]], depth, mask], axis=1)  # [x,y,z,ref,depth,mask]
+    pts = np.concatenate([x, y, z, points[:, [3]], depth, mask], axis=1)  # [x, y, z, ref, depth, mask]
 
     # elevation/azimuth 到 range image 网格
     h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
@@ -62,7 +62,7 @@ def _load_and_project_cached(bin_path: str, H: int, W: int) -> np.ndarray:
     xyzrdm = proj.transpose(2, 0, 1)  # (6, H, W)
     xyzrdm *= xyzrdm[[5]]  # 应用深度掩码
 
-    # 转换为训练输入（depth/reflectance -> 2xHxW, [-1, 1]）
+    # 转换为训练输入 depth / reflectance -> 2 x H x W, [-1, 1]
     x = preprocess_weather(torch.from_numpy(xyzrdm))  # torch.Tensor, CPU
     return x.numpy()
 

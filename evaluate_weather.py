@@ -25,6 +25,10 @@ import utils.inference
 from metrics import bev, distribution
 from metrics.extractor import pointnet, rangenet
 
+import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+
 # from LiDARGen
 MAX_DEPTH = 63.0
 MIN_DEPTH = 0.5
@@ -71,12 +75,12 @@ class LiDARUtility(nn.Module):
 
     @staticmethod
     def denormalize(x):
-        """Scale from [-1, +1] to [0, 1]"""
+        """Scale from [-1, 1] to [0, 1]"""
         return (x + 1) / 2
 
     @staticmethod
     def normalize(x):
-        """Scale from [0, 1] to [-1, +1]"""
+        """Scale from [0, 1] to [-1, 1]"""
         return x * 2 - 1
 
     @torch.no_grad()
@@ -153,13 +157,14 @@ lidar_utils = LiDARUtility(
 )
 
 
+# 有点诡异，为什么 reflectance 需要先从 [0, max_depth] 归一化到 [0, 1]
 def preprocess(xyzrdm):
     x = []
-    x += [xyzrdm[4].unsqueeze(0)]
-    x += [xyzrdm[0].unsqueeze(0)]
-    x += [xyzrdm[1].unsqueeze(0)]
-    x += [xyzrdm[2].unsqueeze(0)]
-    x += [lidar_utils.convert_depth(xyzrdm[[3]])]
+    x += [xyzrdm[4].unsqueeze(0)]  # depth
+    x += [xyzrdm[0].unsqueeze(0)]  # x
+    x += [xyzrdm[1].unsqueeze(0)]  # y
+    x += [xyzrdm[2].unsqueeze(0)]  # z
+    x += [lidar_utils.convert_depth(xyzrdm[[3]])]  # reflectance
     x = torch.cat(x, dim=0)
     return x
 
@@ -192,15 +197,17 @@ class Samples(torch.utils.data.Dataset):
 
 
 def stf_batch_to_5ch(batch_2ch: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """将 STFDataset 返回的 2xHxW 批次转换为评估所需的 5xHxW（depth, x, y, z, reflectance）。"""
+    """
+    将 STFDataset 返回的 2xHxW 批次转换为评估所需的 5xHxW (depth, x, y, z, reflectance)。
+    """
     batch_2ch = batch_2ch.to(device)
-    # [-1,1] -> [0,1]
+    # [-1, 1] -> [0, 1]
     depth_norm01 = lidar_utils.denormalize(batch_2ch[:, [0]])
-    # 还原为 metric depth
+    # depth 还原为 metric depth，[0, 1] -> [0, max_depth]
     depth_metric = lidar_utils.revert_depth(depth_norm01)
     # 从 metric depth 恢复 xyz
     xyz = lidar_utils.to_xyz(depth_metric)
-    # reflectance 已在 STFDataset 中经 [0,1] 归一化，并缩放到 [-1,1]
+    # reflectance 已在 STFDataset 中经 [0, 1] 归一化，并缩放到 [-1, 1] (preprocess function)
     reflect01 = lidar_utils.denormalize(batch_2ch[:, [1]])
     imgs_frd = torch.cat([depth_metric, xyz, reflect01], dim=1)
     return imgs_frd
@@ -209,6 +216,7 @@ def stf_batch_to_5ch(batch_2ch: torch.Tensor, device: torch.device) -> torch.Ten
 @torch.no_grad()
 def evaluate(args):
     torch.set_float32_matmul_precision("high")
+    # 不使用 accelerate 启动分布式
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     _, lidar_utils, cfg = utils.inference.setup_model(args.ckpt, device=device)
@@ -238,7 +246,10 @@ def evaluate(args):
 
     # 使用 STFDataset 加载 STF 实际样本
     stf_loader = build_stf_loader(
-        weather="snow", batch_size=args.batch_size, num_workers=args.num_workers, resolution=(64, 1024)
+        weather="snow",
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        resolution=(64, 1024)
     )
     stf_iter = iter(stf_loader)
     for _ in range(12):
