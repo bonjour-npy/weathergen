@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -83,12 +84,16 @@ class PointNet1(nn.Module):
 def pretrained_pointnet(
     dataset: str = "shapenet", device: torch.device = "cpu", compile: bool = True
 ) -> nn.Module:
+    # localization file path
+    hub_dir = torch.hub.get_dir()
+    model_dir = os.path.join(hub_dir, "checkpoints", "cls_model_39.pth")
+
     if dataset == "shapenet":
         model = PointNet1(k=16)
         state_dict = load_state_dict_from_url(
             url="https://github.com/microsoft/SpareNet/raw/main/Frechet/cls_model_39.pth",
             progress=True,
-            model_dir='./project/path for the cls_model_39.pth',
+            model_dir=model_dir,
         )
     else:
         raise ValueError(f"Unknown dataset: {dataset}")

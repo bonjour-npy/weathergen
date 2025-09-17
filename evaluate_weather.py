@@ -27,7 +27,7 @@ from metrics.extractor import pointnet, rangenet
 
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # from LiDARGen
 MAX_DEPTH = 63.0
@@ -87,8 +87,10 @@ class LiDARUtility(nn.Module):
     def to_xyz(self, metric):
         assert metric.dim() == 4
         mask = (metric > self.min_depth) & (metric < self.max_depth)
-        phi = self.ray_angles[:, [0]]
-        theta = self.ray_angles[:, [1]]
+        # 确保 ray_angles 和 metric 在同一设备上
+        ray_angles = self.ray_angles.to(metric.device)
+        phi = ray_angles[:, [0]]
+        theta = ray_angles[:, [1]]
         grid_x = metric * phi.cos() * theta.cos()
         grid_y = metric * phi.cos() * theta.sin()
         grid_z = metric * phi.sin()
@@ -220,7 +222,7 @@ def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     _, lidar_utils, cfg = utils.inference.setup_model(args.ckpt, device=device)
-    lidar_utils.to(device)
+    lidar_utils = lidar_utils.to(device)  # 确保完全移动到指定设备
 
     H, W = lidar_utils.resolution
     extract_img_feats, preprocess_img = rangenet.rangenet53(
@@ -242,17 +244,20 @@ def evaluate(args):
     # real set
     # =====================================================
 
+    print(f"Real Set Features Collecting.")
+
     real_set = dict(img_feats=list(), pts_feats=list(), bev_hists=list())
 
     # 使用 STFDataset 加载 STF 实际样本
     stf_loader = build_stf_loader(
-        weather="snow",
+        weather=args.weather_flag,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        resolution=(64, 1024)
+        resolution=(64, 1024),
     )
     stf_iter = iter(stf_loader)
-    for _ in range(12):
+    # for _ in range(args.real_set_iterations):
+    for _ in tqdm(range(args.real_set_iterations), desc="real", dynamic_ncols=True):
         try:
             batch_2ch = next(stf_iter)
         except StopIteration:
@@ -286,9 +291,13 @@ def evaluate(args):
     # pickle.dump(real_set, open(cache_file_path, "wb"))
     results["info"]["#real"] = len(real_set["pts_feats"])
 
+    print(f"Real Set Features Collected.")
+
     # =====================================================
     # gen set
     # =====================================================
+
+    print(f"Gen Set Features Collecting.")
 
     gen_loader = DataLoader(
         dataset=Samples(args.sample_dir, helper=lidar_utils.cpu()),
@@ -297,7 +306,7 @@ def evaluate(args):
     )
     gen_set = dict(img_feats=list(), pts_feats=list(), bev_hists=list())
 
-    for imgs_frd, mask in tqdm(gen_loader, desc="gen"):
+    for imgs_frd, mask in tqdm(gen_loader, desc="gen", dynamic_ncols=True):
         imgs_frd, mask = imgs_frd.to(device), mask.to(device)
         if cfg.data["train_reflectance"]:
             with torch.inference_mode():
@@ -322,9 +331,14 @@ def evaluate(args):
 
     results["info"]["#fake"] = len(gen_set["pts_feats"])
 
+    print(f"Gen Set Features Collected.")
+
     # =====================================================
     # evaluation
     # =====================================================
+
+    print(f"Evaluation Metrics Computing.")
+
     torch.cuda.empty_cache()
 
     if cfg.data["train_reflectance"]:
@@ -356,15 +370,21 @@ def evaluate(args):
         torch.from_numpy(gen_set["bev_hists"]).to(device).float(),
     )
 
+    result_path = Path(args.sample_dir).parent / f"eval_results_{args.weather_flag}.json"
+    with open(result_path, "w") as f:
+        json.dump(results, f, indent=4)
+
     print(results)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--real_set_iterations", type=int, default=12)  # orgiginal is 12
+    parser.add_argument("--weather_flag", type=str, default="snow")  # rain, fog, snow
     parser.add_argument("--ckpt", type=Path, default="/path_to/diffusion_steps.pth")
     parser.add_argument("--sample_dir", type=str, default="/path_to/results")
     parser.add_argument("--dataset", choices=["train", "test", "all"], default="all")
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=16)
     args = parser.parse_args()
     evaluate(args)

@@ -78,15 +78,22 @@ def sample(args):
         else:
             (seeds,) = seeds
 
-        weather = load_points_as_images(
-            # point_path="./KITTI-360/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
-            point_path="data/kitti_360/dataset/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
-            weather_fla=args.weather_flag,
-        )  # or random select
-        # 扩展 weather condition 的 batch 以匹配 sample_batch_size
-        weather = weather.repeat_interleave(args.batch_size, dim=0).to(device=device)
+        local_batch_size = len(seeds)
+
+        # 缓存 MDP 增强的天气条件，避免重复 IO
+        if "weather_cache" not in globals() or weather_cache.get("base") is None:
+            base_weather = load_points_as_images(
+                point_path="data/kitti_360/dataset/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points/data/0000000018.bin",
+                weather_fla=args.weather_flag,
+            )  # shape: (1, C, H, W)
+            weather_cache = {"base": base_weather}
+        else:
+            base_weather = weather_cache["base"]
+
+        # 复制到当前本地 batch 尺寸；使用 repeat_interleave 生成显式副本，避免 inplace 造成潜在问题
+        weather = base_weather.repeat_interleave(local_batch_size, dim=0).to(device=device)
         samples = ddpm.sample(
-            batch_size=len(seeds),
+            batch_size=local_batch_size,  # 传入的是本地 batch，而不是全局 batch
             num_steps=args.num_steps,
             rng=utils.inference.setup_rng(seeds.cpu().tolist(), device=device),
             progress=False,
