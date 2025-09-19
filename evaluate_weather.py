@@ -356,6 +356,7 @@ def evaluate(args):
         real_set["pts_feats"], gen_set["pts_feats"]
     )
 
+    # 在 real set 中随机选择 200 个样本
     perm = list(range(len(real_set["bev_hists"])))
     random.Random(0).shuffle(perm)
     perm = perm[:200]

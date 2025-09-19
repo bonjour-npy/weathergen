@@ -12,14 +12,17 @@ def point_cloud_to_histogram(
     assert point_cloud.ndim == 2, "must be (N, 3)"
     assert bins % 2 == 0
     depth = point_cloud.norm(p=2, dim=1)
+    # 应用深度范围掩码
     mask = (depth > min_depth) & (depth < max_depth)
+    # -80, 80
     bound = field_size / 2
     hist = torch.histogramdd(
+        # mask 布尔索引
         point_cloud[mask, 0:2].cpu(),  # xy
         bins=bins,
         range=[-bound, bound, -bound, bound],
     ).hist
-    return hist
+    return hist  # (bins, bins)
 
 
 def cdist_rbf(p: torch.Tensor, q: torch.Tensor, sigma: float = 0.5) -> torch.Tensor:

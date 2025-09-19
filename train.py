@@ -272,7 +272,7 @@ def train(cfg: utils.option.Config):
         x_0 = weather_process(x, weather_flag, xyz, depth)
 
         return {
-            "x_0": x_0,  # (B,C,H,W)
+            "x_0": x_0,  # (B, C, H, W)
             "weather_flag": weather_flag,
         }
 
