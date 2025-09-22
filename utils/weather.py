@@ -453,3 +453,37 @@ def stf_process(weather_flag: str, x_0: torch.Tensor):
             x_weather[i] = x
 
     return x_weather
+
+
+class StatisticsBasedWeatherGenerator(nn.Module):
+    """
+    替代原始的 weather_process 函数，使用基于统计和分布的来模拟天气进行数据增强
+    部分增强函数不是在 range image 上进行的, 因此需要 lidar_utils 中的 to_xyz 函数进行反投影
+
+    Args:
+
+    Returns:
+
+    """
+
+    def __init__(self, lidar_utils: LiDARUtility = lidar_utils):
+        super(StatisticsBasedWeatherGenerator(), self).__init__()
+        self.lidar_utils = lidar_utils
+
+    def density_matching_vectorized():
+        """
+        将 clear weather 点云的密度匹配到 adverse weather 点云上 (在 3D 空间, 而不是 range image)
+
+        Args:
+
+        """
+        pass
+
+    def histogram_matching_vectorized():
+        pass
+
+    def range_depth_scale():
+        pass
+
+    def forward():
+        pass

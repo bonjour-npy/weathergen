@@ -44,11 +44,27 @@ def index_operator(data_dict, index, duplicate=False):
         return data_dict_
 
 
-@DATASETS.register_module('SimDataset')
+@DATASETS.register_module("SimDataset")
 class SimDataset(Dataset):
-    def __init__(self, source_dataset, target_dataset, output_dict='target', few_shot=None, sim_noise=True,
-                 sim_noise_prob=0.5, sim_ref=True, sim_ref_prob=0.5, sim_density=True, sim_density_prob=0.5, depth_filter=False,
-                 transform=None, transform_sim=None, loop=1, sim_jitter=True, sim_jitter_prob=0.5):
+    def __init__(
+        self,
+        source_dataset,
+        target_dataset,
+        output_dict="target",
+        few_shot=None,
+        sim_noise=True,
+        sim_noise_prob=0.5,
+        sim_ref=True,
+        sim_ref_prob=0.5,
+        sim_density=True,
+        sim_density_prob=0.5,
+        depth_filter=False,
+        transform=None,
+        transform_sim=None,
+        loop=1,
+        sim_jitter=True,
+        sim_jitter_prob=0.5,
+    ):
         super(SimDataset, self).__init__()
         self.source_dataset = build_dataset(source_dataset)
         self.target_dataset = build_dataset(target_dataset)
@@ -68,27 +84,17 @@ class SimDataset(Dataset):
         self.sim_jitter_prob = sim_jitter_prob
         if self.few_shot:
             self.select_samples = random.sample(range(len(self.target_dataset)), len(self.target_dataset))
-            select_samples = np.array(self.select_samples) % (len(self.target_dataset)/self.target_dataset.loop)
+            select_samples = np.array(self.select_samples) % (
+                len(self.target_dataset) / self.target_dataset.loop
+            )
             unique_values, indices = np.unique(select_samples, return_index=True)
             sorted_indices = np.sort(indices)
             unique_values_in_order = np.array(self.select_samples)[sorted_indices]
-            self.select_samples = unique_values_in_order[:self.few_shot].tolist()
+            self.select_samples = unique_values_in_order[: self.few_shot].tolist()
         logger = get_root_logger()
-        logger.info(
-            "simulate target noise {}, ref {}, density {}.".format(
-                sim_noise, sim_ref, sim_density
-            )
-        )
-        logger.info(
-            "Totally {} x {} samples in the source set.".format(
-                len(self.source_dataset), self.loop
-            )
-        )
-        logger.info(
-            "Totally {} x {} samples in the target set.".format(
-                len(self.target_dataset), self.loop
-            )
-        )
+        logger.info("simulate target noise {}, ref {}, density {}.".format(sim_noise, sim_ref, sim_density))
+        logger.info("Totally {} x {} samples in the source set.".format(len(self.source_dataset), self.loop))
+        logger.info("Totally {} x {} samples in the target set.".format(len(self.target_dataset), self.loop))
         if self.few_shot:
             logger.info(
                 "Totally {} samples in the target set for few-shot: {}.".format(
@@ -105,24 +111,26 @@ class SimDataset(Dataset):
         else:
             target_idx = idx
         target_data = self.target_dataset[target_idx]
-        min_coord = source_data['coord'].min(axis=0, keepdims=True)
+        min_coord = source_data["coord"].min(axis=0, keepdims=True)
 
         source_data_ = deepcopy(source_data)
-        source_data_['coord'] = np.concatenate((source_data_['coord'], min_coord), axis=0)
-        if 'strength' in source_data_:
-            min_strength = np.zeros((1, source_data_['strength'].shape[1]), dtype=source_data_['strength'].dtype)
-            source_data_['strength'] = np.concatenate((source_data_['strength'], min_strength), axis=0)
-        if 'segment' in source_data_:
-            min_segment = np.array([self.source_dataset.ignore_index], dtype=source_data_['segment'].dtype)
-            source_data_['segment'] = np.concatenate((source_data_['segment'], min_segment), axis=0)
+        source_data_["coord"] = np.concatenate((source_data_["coord"], min_coord), axis=0)
+        if "strength" in source_data_:
+            min_strength = np.zeros(
+                (1, source_data_["strength"].shape[1]), dtype=source_data_["strength"].dtype
+            )
+            source_data_["strength"] = np.concatenate((source_data_["strength"], min_strength), axis=0)
+        if "segment" in source_data_:
+            min_segment = np.array([self.source_dataset.ignore_index], dtype=source_data_["segment"].dtype)
+            source_data_["segment"] = np.concatenate((source_data_["segment"], min_segment), axis=0)
         source_data_ = self.transform(source_data_)
-        if self.output_dict == 'source':
+        if self.output_dict == "source":
             data_dict = deepcopy(source_data_)
         source_data_ = {f"source_{key}": value for key, value in source_data_.items()}
 
         if self.depth_filter:
             # filter target data by depth
-            target_mask = np.linalg.norm(target_data['coord'], 2, axis=1) > 1.6
+            target_mask = np.linalg.norm(target_data["coord"], 2, axis=1) > 1.6
             target_data = index_operator(target_data, target_mask)
 
         if self.sim_jitter and np.random.rand() < self.sim_jitter_prob:
@@ -131,48 +139,52 @@ class SimDataset(Dataset):
         # simulate source_strength to match target_strength
         p = np.random.rand()
         if self.sim_ref and p < self.sim_ref_prob:
-            source_strength = source_data['strength']
-            target_strength = target_data['strength']
-            dist_mask = np.linalg.norm(target_data['coord'], 2, axis=1) > 1.6
-            simulate_strength = self.histogram_matching_vectorized(source_strength, target_strength[dist_mask])
-            source_data['strength'] = simulate_strength
+            source_strength = source_data["strength"]
+            target_strength = target_data["strength"]
+            dist_mask = np.linalg.norm(target_data["coord"], 2, axis=1) > 1.6
+            simulate_strength = self.histogram_matching_vectorized(
+                source_strength, target_strength[dist_mask]
+            )
+            source_data["strength"] = simulate_strength
 
         p = np.random.rand()
         # simulate drop noise by range view
         if self.sim_noise and p < self.sim_noise_prob:
-            target_mask = ~target_data['proj_mask'].astype(bool)
+            target_mask = ~target_data["proj_mask"].astype(bool)
             kernel_size = 3
             kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
             convolved_mask = cv2.filter2D(target_mask.astype(np.float32), -1, kernel)
-            convolved_mask = ~((convolved_mask < 1.) & target_mask)
-            unproj_mask = convolved_mask[source_data['proj_y'], source_data['proj_x']]
+            convolved_mask = ~((convolved_mask < 1.0) & target_mask)
+            unproj_mask = convolved_mask[source_data["proj_y"], source_data["proj_x"]]
             source_data = index_operator(source_data, unproj_mask)
 
         p = np.random.rand()
         # simulate source_data density to match target_data
         if self.sim_density and p < self.sim_density_prob:
-            source_coord = source_data['coord']
-            target_coord = target_data['coord']
+            source_coord = source_data["coord"]
+            target_coord = target_data["coord"]
             density_mask = self.density_matching_vectorized(source_coord, target_coord)
             source_data = index_operator(source_data, density_mask)
 
         source_data = self.transform_sim(source_data)
 
         # keep sim and source in same voxel coord
-        source_data['coord'] = np.concatenate((source_data['coord'], min_coord), axis=0)
-        if 'strength' in source_data:
-            min_strength = np.zeros((1, source_data['strength'].shape[1]), dtype=source_data['strength'].dtype)
-            source_data['strength'] = np.concatenate((source_data['strength'], min_strength), axis=0)
-        if 'segment' in source_data:
-            min_segment = np.array([self.source_dataset.ignore_index], dtype=source_data['segment'].dtype)
-            source_data['segment'] = np.concatenate((source_data['segment'], min_segment), axis=0)
+        source_data["coord"] = np.concatenate((source_data["coord"], min_coord), axis=0)
+        if "strength" in source_data:
+            min_strength = np.zeros(
+                (1, source_data["strength"].shape[1]), dtype=source_data["strength"].dtype
+            )
+            source_data["strength"] = np.concatenate((source_data["strength"], min_strength), axis=0)
+        if "segment" in source_data:
+            min_segment = np.array([self.source_dataset.ignore_index], dtype=source_data["segment"].dtype)
+            source_data["segment"] = np.concatenate((source_data["segment"], min_segment), axis=0)
 
         source_data = self.transform(source_data)
         sim_data = {f"sim_{key}": value for key, value in source_data.items()}
-        if self.output_dict == 'sim':
+        if self.output_dict == "sim":
             data_dict = deepcopy(sim_data)
         target_data = self.transform(target_data)
-        if self.output_dict == 'target':
+        if self.output_dict == "target":
             data_dict = deepcopy(target_data)
         target_data = {f"target_{key}": value for key, value in target_data.items()}
 
@@ -195,53 +207,46 @@ class SimDataset(Dataset):
 
     def density_matching_vectorized(self, source, template):
         """
-        将source coord的密度匹配到template coord的密度
+        将 source coord 的密度匹配到 template coord 的密度 (不是在 range image 上匹配)
 
         参数:
-            source: (N1, 3)形状的源坐标数组
-            template: (N2, 3)形状的模板坐标数组
+            source: (N1, 3) 形状的源坐标数组 xyz
+            template: (N2, 3) 形状的模板坐标数组 xyz
 
         返回:
-            匹配后的源mask (N1,)形状，值为0或1，表示是否保留该点
+            匹配后的源 mask (N1,) 形状 值为, 0 或 1, 表示是否保留该点
         """
-        # 计算每个点的深度（到原点的距离）
+        # L2 范式计算每个点的深度（到原点的距离）
         source_depth = np.linalg.norm(source[:, :3], 2, axis=1)
         template_depth = np.linalg.norm(template[:, :3], 2, axis=1)
 
-        # 固定深度范围为[0, 100]
+        # 固定深度范围为 [0, 100]
         min_depth = 0.0
         max_depth = 100.0
 
-        # 计算直方图 - 使用固定的bin边界
+        # 计算直方图 - 使用固定的 bin 边界
         hist_source, bin_edges = np.histogram(
-            np.clip(source_depth, min_depth, max_depth),
-            bins=100,
-            range=(min_depth, max_depth)
+            np.clip(source_depth, min_depth, max_depth), bins=100, range=(min_depth, max_depth)
         )
-        hist_template, _ = np.histogram(
-            np.clip(template_depth, min_depth, max_depth),
-            bins=bin_edges
-        )
+        hist_template, _ = np.histogram(np.clip(template_depth, min_depth, max_depth), bins=bin_edges)
 
         # 避免除以零
         hist_source = hist_source.astype(float) + 1e-10
         hist_template = hist_template.astype(float) + 1e-10
 
-        # 计算每个bin的保留概率
-        ratio = np.where(hist_source > hist_template,
-                         (hist_template / hist_source),
-                         1.0)
+        # 计算每个 bin 的保留概率
+        ratio = np.where(hist_source > hist_template, (hist_template / hist_source), 1.0)
 
-        # 为每个source点找到对应的bin和概率
+        # 为每个 source 点找到对应的 bin 和概率
         bin_indices = np.digitize(source_depth, bin_edges) - 1
 
-        # 处理边界情况：
-        # 1. 小于min_depth的点(分配到第一个bin)
-        # 2. 大于max_depth的点(分配到最后一个bin)
+        # 处理边界情况 (直接截断)
+        # 1. 小于 min_depth 的点(分配到第一个 bin)
+        # 2. 大于 max_depth 的点(分配到最后一个 bin)
         # 3. 正常范围内的点
         bin_indices = np.clip(bin_indices, 0, len(ratio) - 1)
 
-        # 深度在[0,100]之外的点概率设为1（直接保留）
+        # 深度在 [0, 100] 之外的点概率设为 1
         out_of_range_mask = (source_depth < min_depth) | (source_depth > max_depth)
         probs = np.where(out_of_range_mask, 1.0, ratio[bin_indices])
 
@@ -278,18 +283,12 @@ class SimDataset(Dataset):
 
         # 创建插值函数（源CDF -> 源值）
         source_cdf_to_value = interpolate.interp1d(
-            source_cdf,
-            source_values,
-            bounds_error=False,
-            fill_value=(source_values[0], source_values[-1])
+            source_cdf, source_values, bounds_error=False, fill_value=(source_values[0], source_values[-1])
         )
 
         # 创建插值函数（源值 -> 源CDF）
         value_to_source_cdf = interpolate.interp1d(
-            source_values,
-            source_cdf,
-            bounds_error=False,
-            fill_value=(source_cdf[0], source_cdf[-1])
+            source_values, source_cdf, bounds_error=False, fill_value=(source_cdf[0], source_cdf[-1])
         )
 
         # 创建插值函数（模板CDF -> 模板值）
@@ -297,7 +296,7 @@ class SimDataset(Dataset):
             template_cdf,
             template_values,
             bounds_error=False,
-            fill_value=(template_values[0], template_values[-1])
+            fill_value=(template_values[0], template_values[-1]),
         )
 
         # 对于源数组中的每个值：
@@ -312,16 +311,20 @@ class SimDataset(Dataset):
         # 3. 获取对应的模板值
         matched_values = template_cdf_to_value(template_cdf[idx])
 
-        return matched_values[:, np.newaxis] / 255.
+        return matched_values[:, np.newaxis] / 255.0
 
     def range_depth_scale(self, data_dict, source_dict):
         """
         平滑深度图，使用范围深度平滑方法
         """
-        depth_img = data_dict['proj_range']
-        depth = data_dict['unproj_range']
-        depth_img_filled = self.proj_fill(2, 1024, data_dict['proj_x'] / 2048, data_dict['proj_y'], depth, depth_img.copy())
-        depth_img_filled = self.proj_fill(4, 512, data_dict['proj_x'] / 2048, data_dict['proj_y'], depth, depth_img_filled)
+        depth_img = data_dict["proj_range"]
+        depth = data_dict["unproj_range"]
+        depth_img_filled = self.proj_fill(
+            2, 1024, data_dict["proj_x"] / 2048, data_dict["proj_y"], depth, depth_img.copy()
+        )
+        depth_img_filled = self.proj_fill(
+            4, 512, data_dict["proj_x"] / 2048, data_dict["proj_y"], depth, depth_img_filled
+        )
         mask = depth_img_filled == -1
         # 平滑处理
         kernel_size = 3
@@ -335,11 +338,11 @@ class SimDataset(Dataset):
         mask_2 = scale > 1.1
         scale[mask_2] = 1.0  # 保持大于1.1的区域不变
 
-        scale = scale[source_dict['proj_y'], source_dict['proj_x']]
-        source_depth_scaled = source_dict['unproj_range'] * scale
-        mask_3 = np.abs(source_depth_scaled - source_dict['unproj_range']) > 0.2
+        scale = scale[source_dict["proj_y"], source_dict["proj_x"]]
+        source_depth_scaled = source_dict["unproj_range"] * scale
+        mask_3 = np.abs(source_depth_scaled - source_dict["unproj_range"]) > 0.2
         scale[mask_3] = 1.0
-        source_dict['coord'] = source_dict['coord'] * scale[:, None]
+        source_dict["coord"] = source_dict["coord"] * scale[:, None]
 
         return source_dict
 
@@ -354,7 +357,7 @@ class SimDataset(Dataset):
 
         proj_range512[proj_y, px] = depth
         proj_range512 = np.repeat(proj_range512, repeats=repeat, axis=1)
-        mask512_1024 = ((proj_range < 0) & (proj_range512 > 0))
+        mask512_1024 = (proj_range < 0) & (proj_range512 > 0)
 
         proj_range[mask512_1024] = proj_range512[mask512_1024]  # [H, W]
         return proj_range

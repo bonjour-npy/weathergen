@@ -26,9 +26,9 @@ def _name_to_bin(root: Path, name: str) -> Path:
 @lru_cache(maxsize=512)
 def _load_and_project_cached(bin_path: str, H: int, W: int) -> np.ndarray:
     """
-    读取一个 STF .bin 点云并投影为 (6, H, W) 的 xyzrdm，再经 preprocess_weather
-    返回标准训练用的 2xHxW（depth、reflectance 归一化后再 [-1,1]）的 numpy 数组。
-    说明：缓存作用域为进程内（DataLoader worker 内部），避免重复 I/O 与投影。
+    读取一个 STF .bin 点云并投影为 (6, H, W) 的 xyzrdm, 再经 preprocess_weather
+    返回标准训练用的 2xHxW (depth、reflectance 归一化后再 [-1,1]) 的 numpy 数组
+    说明: 缓存作用域为进程内 (DataLoader worker 内部) 避免重复 I/O 与投影
     """
     path = Path(bin_path)
     points = np.fromfile(path, dtype=np.float32).reshape((-1, 5))
@@ -76,9 +76,9 @@ def _scatter(array, index, value):
 
 class STFDataset(Dataset):
     """
-    Seeing Through Fog 投影数据集（按需在线投影 + 进程内 LRU 缓存）。
+    Seeing Through Fog 投影数据集 (按需在线投影 + 进程内 LRU 缓存)
 
-    返回：Tensor[2, H, W]，为 depth 与 reflectance 归一化后再标准化到 [-1,1]。
+    返回: Tensor[2, H, W], 为 depth 与 reflectance 归一化后再标准化到 [-1, 1]
     """
 
     def __init__(
