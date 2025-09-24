@@ -133,9 +133,11 @@ class SimDataset(Dataset):
             target_mask = np.linalg.norm(target_data["coord"], 2, axis=1) > 1.6
             target_data = index_operator(target_data, target_mask)
 
+        # Deprecated
         if self.sim_jitter and np.random.rand() < self.sim_jitter_prob:
             source_data = self.range_depth_scale(target_data, source_data)
 
+        # Reflectance Intensity Distribution Transfer
         # simulate source_strength to match target_strength
         p = np.random.rand()
         if self.sim_ref and p < self.sim_ref_prob:
@@ -147,17 +149,21 @@ class SimDataset(Dataset):
             )
             source_data["strength"] = simulate_strength
 
+        # Range-View-Based Point Drop Pattern Transfer
         p = np.random.rand()
         # simulate drop noise by range view
         if self.sim_noise and p < self.sim_noise_prob:
+            # 无效点掩码
             target_mask = ~target_data["proj_mask"].astype(bool)
             kernel_size = 3
             kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
             convolved_mask = cv2.filter2D(target_mask.astype(np.float32), -1, kernel)
+            # 选中孤立无效点并设置为 0 用于后续丢弃
             convolved_mask = ~((convolved_mask < 1.0) & target_mask)
             unproj_mask = convolved_mask[source_data["proj_y"], source_data["proj_x"]]
             source_data = index_operator(source_data, unproj_mask)
 
+        # Distance-Aware Density Distribution Transfer
         p = np.random.rand()
         # simulate source_data density to match target_data
         if self.sim_density and p < self.sim_density_prob:
@@ -257,11 +263,11 @@ class SimDataset(Dataset):
 
     def histogram_matching_vectorized(self, source, template):
         """
-        将source的直方图匹配到template数组的直方图
+        将 source 的直方图匹配到 template 数组的直方图
 
         参数:
-            source: (N1,1)形状的源数组
-            template: (N2,1)形状的模板数组
+            source: (N1, 1) 形状的源数组
+            template: (N2, 1) 形状的模板数组
 
         返回:
             匹配后的源数组
@@ -316,48 +322,100 @@ class SimDataset(Dataset):
     def range_depth_scale(self, data_dict, source_dict):
         """
         平滑深度图，使用范围深度平滑方法
+        data_dict: 目标域点云
+        source_dict: 源域点云
         """
         depth_img = data_dict["proj_range"]
         depth = data_dict["unproj_range"]
+        # 用低分辨率复制再填充回原始高分辨率的方法来实现孤立无效点抑制
         depth_img_filled = self.proj_fill(
             2, 1024, data_dict["proj_x"] / 2048, data_dict["proj_y"], depth, depth_img.copy()
         )
+        # 填充两次
         depth_img_filled = self.proj_fill(
             4, 512, data_dict["proj_x"] / 2048, data_dict["proj_y"], depth, depth_img_filled
         )
+        # 填充后仍为无效点的掩码
         mask = depth_img_filled == -1
         # 平滑处理
         kernel_size = 3
+        # 均值滤波 保证卷积核加权平均后权值和为1
         kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
+        # 过滤两次
         smoothed_depth_img = cv2.filter2D(depth_img_filled, -1, kernel)
         smoothed_depth_img = cv2.filter2D(smoothed_depth_img, -1, kernel)
+        # 计算尺度
         scale = smoothed_depth_img / depth_img_filled
+        # 恢复无效点
         scale[mask] = 0
         mask_1 = scale < 0.9
-        scale[mask_1] = 1.0  # 保持小于0.9的区域不变
+        scale[mask_1] = 1.0  # 保持小于 0.9 的区域不变
         mask_2 = scale > 1.1
-        scale[mask_2] = 1.0  # 保持大于1.1的区域不变
+        scale[mask_2] = 1.0  # 保持大于 1.1 的区域不变
 
-        scale = scale[source_dict["proj_y"], source_dict["proj_x"]]
-        source_depth_scaled = source_dict["unproj_range"] * scale
+        # scale 作为最终的目标域缩放掩码，引入源域点云进行对齐
+        # 形状说明：
+        # - scale: (H, W)
+        # - source_dict["proj_y"]: (N_src,) int
+        # - source_dict["proj_x"]: (N_src,) int
+        # 使用配对的一维索引数组进行高级索引，相当于逐点从 (H, W) 的 scale 图上
+        # 取每个源点投影到的像素处的缩放值，结果为一维数组 (N_src,)
+        scale = scale[source_dict["proj_y"], source_dict["proj_x"]]  # (N_src,)
+
+        # source_dict["unproj_range"]: (N_src,)
+        source_depth_scaled = source_dict["unproj_range"] * scale  # (N_src,)
+        # 大于 0.2m 的保持不变（将对应 scale 置回 1.0）
         mask_3 = np.abs(source_depth_scaled - source_dict["unproj_range"]) > 0.2
         scale[mask_3] = 1.0
+
+        # source_dict["coord"]: (N_src, 3)；scale[:, None]: (N_src, 1) -> 广播到 (N_src, 3)
         source_dict["coord"] = source_dict["coord"] * scale[:, None]
 
         return source_dict
 
     def proj_fill(self, repeat, proj_w, px, proj_y, depth, proj_range):
+        """
+        低分辨率复制再回填对 range image 进行无效点填补
+
+        args:
+            - repeat: int
+                沿宽度方向的重复倍数（例如 2 或 4），满足 proj_w * repeat == W
+            - proj_w: int
+                低分辨率的宽度（例如 1024 或 512）
+            - px: np.ndarray, shape (N,)
+                归一化的横向坐标，典型来源为原始投影横坐标除以基准宽度（如 proj_x / 2048），范围约在 [0, 1)
+            - proj_y: np.ndarray, shape (N,)
+                垂直方向像素索引，取值范围 [0, H-1]，整型
+            - depth: np.ndarray, shape (N,)
+                与 (proj_y, px) 对应的深度值，> 0
+            - proj_range: np.ndarray, shape (H, W)
+                原始分辨率的深度图，使用 -1 表示无效像素；要求 W == proj_w * repeat
+            - N 是有效投影点数（或用于回填的采样点数），不等于也不必等于 H * W；通常 N <= H * W
+
+        returns:
+            - np.ndarray, shape (H, W)：回填后的 range image（仅在“原始无效且低分辨率复制后有效”的位置被填补）
+        """
         proj_H = 64
-        px = px * proj_w
-        px = np.floor(px)
-        px = np.minimum(proj_w - 1, px)
-        px = np.maximum(0, px).astype(np.int32)  # in [0, W-1]
+        # px: (N,) -> 缩放到低分辨率网格并离散化
+        px = px * proj_w  # (N,)
+        px = np.floor(px)  # (N,)
+        # 等价于 clamp 操作，确保在 [0, proj_w-1]
+        px = np.minimum(proj_w - 1, px)  # (N,)
+        px = np.maximum(0, px).astype(np.int32)  # (N,)
 
-        proj_range512 = np.full((proj_H, proj_w), -1, dtype=np.float32)  # [H, W]: height, width
+        # 低分辨率画布，使用 -1 表示无效
+        proj_range512 = np.full((proj_H, proj_w), -1, dtype=np.float32)  # (H, proj_w)
 
+        # 将深度值投影到 range image 上
+        # 两个索引数组 proj_y 和 px 都是一维且等长 (N,)
+        # 赋值后 proj_range512 仍是 (H, proj_w)
+        # 若同一像素位置被多次索引赋值，则会覆盖
         proj_range512[proj_y, px] = depth
+        # 沿宽度方向重复 -> (H, proj_w * repeat) == (H, W)
         proj_range512 = np.repeat(proj_range512, repeats=repeat, axis=1)
+        # 原始分辨率无效但是低分辨率复制后有效的位置
         mask512_1024 = (proj_range < 0) & (proj_range512 > 0)
 
-        proj_range[mask512_1024] = proj_range512[mask512_1024]  # [H, W]
+        # 将低分辨率复制后有效的值填补到原始分辨率无效点中
+        proj_range[mask512_1024] = proj_range512[mask512_1024]  # 抑制无效点
         return proj_range

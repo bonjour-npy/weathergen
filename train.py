@@ -21,7 +21,7 @@ from simple_parsing import ArgumentParser
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from utils.weather import weather_process
+from utils.weather import weather_process_swg
 from utils.stf_dataset import build_stf_loader
 import utils.inference
 import utils.option
@@ -145,9 +145,8 @@ def train(cfg: utils.option.Config):
 
     # Load pretrained weights for fine-tuning
     if cfg.training.train_model == "finetune":
-        checkpoint_path = (
-            "logs/diffusion/kitti_360/spherical-1024/20250910T125905/models/diffusion_0000300000.pth"
-        )
+        # "logs/diffusion/kitti_360/spherical-1024/20250910T125905/models/diffusion_0000300000.pth"
+        checkpoint_path = cfg.training.pretrained_ckpt
 
         with accelerator.main_process_first():
             if accelerator.is_main_process:
@@ -250,12 +249,12 @@ def train(cfg: utils.option.Config):
         # 在 CPU 上完成与 preprocess 等价的操作
         x_parts = []
         if cfg.data.train_depth:
-            x_parts.append(lidar_utils_cpu.convert_depth(depth))
+            x_parts.append(lidar_utils_cpu.convert_depth(depth))  # [0, 1]
         if cfg.data.train_reflectance and reflectance is not None:
-            x_parts.append(reflectance)
+            x_parts.append(reflectance)  # [0, 1]
         x = torch.cat(x_parts, dim=1)
-        x = lidar_utils_cpu.normalize(x)
-        x = F.interpolate(x, size=cfg.data.resolution, mode="nearest-exact")
+        x = lidar_utils_cpu.normalize(x)  # [-1, 1]
+        x = F.interpolate(x, size=cfg.data.resolution, mode="nearest-exact")  # B, 2, 64, 1024 [-1, 1]
 
         # 为整个 batch 随机选择同一种天气（与原训练循环一致）
         q = np.random.randint(0, 4)
@@ -268,8 +267,10 @@ def train(cfg: utils.option.Config):
         else:
             weather_flag = "rain"
 
-        # 在 CPU 上应用天气增强（保持与原 weather_process 语义一致）
-        x_0 = weather_process(x, weather_flag, xyz, depth)
+        # x_0 = weather_process(x, weather_flag, xyz, depth)  # 原始 MDP
+
+        # Statistics-Based Weather Generator (SWG)
+        x_0 = weather_process_swg(x, weather_flag, xyz, depth)
 
         return {
             "x_0": x_0,  # (B, C, H, W)

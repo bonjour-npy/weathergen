@@ -35,22 +35,33 @@ class DiffusionConfig:
 
 @dataclasses.dataclass
 class TrainingConfig:
-    # batch_size_train: int = 8  # 16
-    # batch_size_eval: int = 2  # 4
-    batch_size_train: int = 8
+    # training
+    train_model: Literal["train", "finetune"] = "train"
+    batch_size_train: int = 8  # 16 in total
     batch_size_eval: int = 4
-    num_workers: int = 16  # os.cpu_count() = 112
-    # num_steps: int = 300_000
-    num_steps: int = 100_000  # fine-tune
+    num_steps: int = 300_000
+    lr: float = 4e-4
+    lr_warmup_steps: int = 30_000
+
+    # fine-tune
+    # train_model: Literal["train", "finetune"] = "finetune"
+    # batch_size_train: int = 8
+    # batch_size_eval: int = 4
+    # num_steps: int = 100_000  # fine-tune
+    # lr: float = 1e-4
+    # lr_warmup_steps: int = 10_000
+    pretrained_ckpt: str = (
+        "logs/diffusion/kitti_360/spherical-1024/20250910T125905/models/diffusion_0000300000.pth"
+    )
+
     steps_save_image: int = 5_000  # 50_000
     steps_save_model: int = 50_000  # 50_000
+
     # steps_save_image: int = 5  # debug
     # steps_save_model: int = 10  # debug
+
     gradient_accumulation_steps: int = 1
-    # lr: float = 4e-4  # fine-tune 1e-4
-    lr: float = 1e-4
-    # lr_warmup_steps: int = 30_000
-    lr_warmup_steps: int = 10_000
+    num_workers: int = 16  # os.cpu_count() = 112
     adam_beta1: float = 0.9
     adam_beta2: float = 0.99
     adam_weight_decay: float = 0.0
@@ -62,8 +73,6 @@ class TrainingConfig:
     output_dir: str = "logs/diffusion"
     seed: int = 42  # 0
     # train or fine-tune
-    # train_model: Literal["train", "finetune"] = "train"
-    train_model: Literal["train", "finetune"] = "finetune"
 
 
 @dataclasses.dataclass
