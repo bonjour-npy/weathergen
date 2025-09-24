@@ -135,8 +135,8 @@ class LiDARUtility(nn.Module):
 lidar_utils = LiDARUtility(
     resolution=(64, 1024),
     image_format="log_depth",
-    min_depth=1.45,
-    max_depth=80.0,
+    min_depth=0.0,
+    max_depth=120.0,
     ray_angles=None,
 )
 
@@ -357,7 +357,7 @@ def stf_process(weather_flag: str, x_0: torch.Tensor):
         selected_path = np.random.choice(all_point_path, size=B, replace=False)
         for i in range(B):
             point_path = Path("./seeingthroughfog/lidar_hdl64_strongest/") / (selected_path[i] + ".bin")
-            points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))
+            points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 5))  # five channels
             points = points[:, :4]
             xyz = points[:, :3]  # xyz
             x = xyz[:, [0]]
@@ -519,12 +519,12 @@ class StatisticsBasedWeatherGenerator(nn.Module):
         z = xyz[:, [2]]
         rflct = pts[:, [3]]
         depth = _np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
-        mask = (depth >= 1.45) & (depth <= 80.0)
+        mask = (depth >= self.min_depth) & (depth <= self.max_depth)
         points = _np.concatenate([x, y, z, rflct, depth, mask], axis=1)
 
         H, W = self.H, self.W
         h_up, h_down = _np.deg2rad(3), _np.deg2rad(-25)
-        elevation = _np.arcsin(z / (depth + 1e-12)) + abs(h_down)
+        elevation = _np.arcsin(z / (depth + 1e-8)) + abs(h_down)
         grid_h = 1 - elevation / (h_up - h_down)
         grid_h = _np.floor(grid_h * H).clip(0, H - 1).astype(_np.int32)
 
@@ -774,8 +774,8 @@ class StatisticsBasedWeatherGenerator(nn.Module):
         keep_masks = []
         bins = 100
         # 仅在有效深度范围内进行统计，避免无效像素挤占第一个 bin 造成整圈伪影
-        min_d = float(self.min_depth)  # 1.45
-        max_d = float(self.max_depth)  # 80.0
+        min_d = float(self.min_depth)
+        max_d = float(self.max_depth)
         H, W = self.H, self.W
         for b in range(B):
             # 计算源/目标的欧氏深度并拆分出有效像素
@@ -901,3 +901,250 @@ def weather_process_swg(
         weather_process_swg._generator = StatisticsBasedWeatherGenerator(lidar_utils)
     gen: StatisticsBasedWeatherGenerator = weather_process_swg._generator
     return gen(x_normal, weather_flag, xyz_normal, depth_normal)
+
+
+# =========================
+# Raw-point version of SWG
+# =========================
+
+
+def _read_points_bin(bin_path: str) -> np.ndarray:
+    """
+    Read .bin file as Nx{4 | 5} float32 array.
+    Supported:
+      - Nx4: [x, y, z, reflectance]
+      - Nx5: [x, y, z, reflectance, extra] (e.g., STF)
+    Returns Nx4 with reflectance normalized to [0, 1].
+    """
+    arr = np.fromfile(bin_path, dtype=np.float32)
+    if arr.size % 5 == 0:
+        pts = arr.reshape((-1, 5))[:, :4]
+    elif arr.size % 4 == 0:
+        pts = arr.reshape((-1, 4))
+    else:
+        raise ValueError(f"Unexpected array size {arr.size} for {bin_path}; not divisible by 4 or 5.")
+
+    return pts
+
+
+def _project_raw_to_image(raw: np.ndarray, H: int, W: int, min_depth: float, max_depth: float):
+    """
+    Project raw points to range image with near-point overwrite.
+
+    Returns:
+      depth_img (H, W): metric depth; 0 means invalid
+      rflct_img (H, W): reflectance in [0, 1] approx (clipped later)
+      proj_y (N,), proj_x (N,), unproj_depth (N,) for the input points
+    """
+    xyz = raw[:, :3]
+    r = raw[:, 3:4]
+    x = xyz[:, 0:1]
+    y = xyz[:, 1:2]
+    z = xyz[:, 2:3]
+    depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
+    valid = (depth >= min_depth) & (depth <= max_depth)
+
+    # Vertical index
+    h_up, h_down = np.deg2rad(3), np.deg2rad(-25)
+    elevation = np.arcsin(z / (depth + 1e-8)) + abs(h_down)
+    # Compute y coords for all (N,) points
+    grid_h = 1 - elevation / (h_up - h_down)
+    grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
+
+    # Horizontal index
+    azimuth = -np.arctan2(y, x)  # [-pi, pi]
+    # Compute x coords for all (N,) points
+    grid_w = (azimuth / np.pi + 1) / 2 % 1
+    grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
+
+    # Prepare depth & reflectance images
+    depth_img = np.zeros((H, W), dtype=np.float32)
+    rflct_img = np.zeros((H, W), dtype=np.float32)
+
+    # Order by -depth so nearer points overwrite farther ones
+    order = np.argsort(-depth.squeeze(1))
+    gh = grid_h[order].squeeze(1)
+    gw = grid_w[order].squeeze(1)
+    dep_ord = depth[order].squeeze(1)
+    r_ord = r[order].squeeze(1)
+    val_ord = valid[order].squeeze(1)
+
+    # Assign only valid
+    ghv = gh[val_ord]
+    gwv = gw[val_ord]
+    depth_img[ghv, gwv] = dep_ord[val_ord]
+    rflct_img[ghv, gwv] = r_ord[val_ord]
+    # Ensure reflectance within [0, 1]
+    if rflct_img.size > 0:
+        rflct_img = np.clip(rflct_img, 0.0, 1.0)
+
+    # proj_y: grid_h, proj_x: grid_w, unproj_depth: depth
+    return depth_img, rflct_img, grid_h.squeeze(1), grid_w.squeeze(1), depth.squeeze(1)
+
+
+# Reflectance Intensity Distribution Transfer
+def _histogram_reflectance_matching(src_r: np.ndarray, tgt_r: np.ndarray) -> np.ndarray:
+    """
+    Match histogram of source reflectance to target reflectance using 256 bins.
+    src_r, tgt_r: (N,), real-valued; returns matched (N,) in [0,1].
+    """
+    if tgt_r.size == 0:
+        return np.clip(src_r, 0.0, 1.0)
+    s = np.floor(np.clip(src_r, 0.0, None) * 255.0)
+    t = np.floor(np.clip(tgt_r, 0.0, None) * 255.0)
+    sv, sc = np.unique(s, return_counts=True)
+    tv, tc = np.unique(t, return_counts=True)
+    scdf = np.cumsum(sc).astype(np.float64)
+    scdf /= scdf[-1]
+    tcdf = np.cumsum(tc).astype(np.float64)
+    tcdf /= tcdf[-1]
+    # map source value -> cdf -> target value
+    s_val2cdf = np.interp(s, sv, scdf, left=scdf[0], right=scdf[-1])
+    t_val = np.interp(s_val2cdf, tcdf, tv, left=tv[0], right=tv[-1])
+    return (t_val / 255.0).astype(np.float32)
+
+
+# Range-View-Based Point Drop Pattern Transfer
+def _range_view_drop_mask(depth_img_t: np.ndarray, min_depth: float, max_depth: float) -> np.ndarray:
+    """
+    Build range view drop mask (H, W) from target depth image (metric depth, 0 invalid).
+    keep = ~((blurred_invalid < 1.0) & target_invalid)
+    """
+    H, W = depth_img_t.shape
+    proj_mask = (depth_img_t >= min_depth) & (depth_img_t <= max_depth)
+    # Choose
+    target_invalid = ~proj_mask
+    inv_float = target_invalid.astype(np.float32)
+    # 3x3 mean blur with reflect-like padding replicated by cv2 equivalent using np.pad + conv
+    k = np.ones((3, 3), dtype=np.float32) / 9.0
+    pad = 1
+    inv_pad = np.pad(inv_float, ((pad, pad), (pad, pad)), mode="reflect")
+    # convolution
+    blurred = (
+        inv_pad[:-2, :-2]
+        + inv_pad[:-2, 1:-1]
+        + inv_pad[:-2, 2:]
+        + inv_pad[1:-1, :-2]
+        + inv_pad[1:-1, 1:-1]
+        + inv_pad[1:-1, 2:]
+        + inv_pad[2:, :-2]
+        + inv_pad[2:, 1:-1]
+        + inv_pad[2:, 2:]
+    ) / 9.0
+    # Choose invalid points caused by adverse weather, where surrounding is not all invalid (blurred < 1.0)
+    cond = (blurred < 1.0) & target_invalid
+    keep = ~cond
+    return keep.astype(np.bool_)
+
+
+# Distance-aware Density Distribution Transfer
+def _density_matching(
+    source_xyz: np.ndarray, target_xyz: np.ndarray, min_depth: float, max_depth: float
+) -> np.ndarray:
+    """
+    Compute density mask for source points to match target depth distribution.
+    Returns boolean mask (N_src,).
+    """
+    s_depth = np.linalg.norm(source_xyz[:, :3], 2, axis=1)
+    t_depth = np.linalg.norm(target_xyz[:, :3], 2, axis=1)
+    bins = 100
+    hist_s, edges = np.histogram(
+        np.clip(s_depth, min_depth, max_depth), bins=bins, range=(min_depth, max_depth)
+    )
+    hist_t, _ = np.histogram(np.clip(t_depth, min_depth, max_depth), bins=edges)
+    hist_s = hist_s.astype(float) + 1e-8
+    hist_t = hist_t.astype(float) + 1e-8
+    ratio = np.where(hist_s > hist_t, (hist_t / hist_s), 1.0)
+    bin_indices = np.digitize(s_depth, edges) - 1
+    bin_indices = np.clip(bin_indices, 0, len(ratio) - 1)
+    out_of = (s_depth < min_depth) | (s_depth > max_depth)
+    probs = np.where(out_of, 1.0, ratio[bin_indices])
+    keep = np.random.rand(len(s_depth)) < probs
+    return keep
+
+
+def weather_process_swg_raw(
+    src_bin_paths: list[str],
+    weather_flag: str,
+    lidar_utils: LiDARUtility,
+    include_reflectance: bool = True,
+    resolution: tuple[int, int] = (64, 1024),
+) -> torch.Tensor:
+    """
+    SWG operating on raw point clouds, then re-project to range image.
+
+    Returns: torch.Tensor [B, C, H, W] in [-1, 1]
+    """
+    assert weather_flag in {"fog", "snow", "rain"}, "Only adverse weather is expected here"
+    H, W = int(resolution[0]), int(resolution[1])
+    min_d = float(lidar_utils.min_depth)
+    max_d = float(lidar_utils.max_depth)
+
+    # Sample B target files from STF splits
+    stf_root = Path("./data/SeeingThroughFog")
+    split_map = {
+        "fog": "splits/dense_fog_day.txt",
+        "snow": "splits/snow_day.txt",
+        "rain": "splits/rain.txt",
+    }
+    names = np.genfromtxt(str(stf_root / split_map[weather_flag]), dtype="U", delimiter="\n").tolist()
+    tgt_paths = [
+        str(
+            stf_root
+            / "SeeingThroughFogCompressedExtracted/lidar_hdl64_strongest"
+            / (names[np.random.randint(0, len(names))].strip().replace(",", "_") + ".bin")
+        )
+        for _ in src_bin_paths
+    ]
+
+    outs = []
+    for src_path, tgt_path in zip(src_bin_paths, tgt_paths):
+        # Load raw clouds
+        src_pts = _read_points_bin(src_path)
+        tgt_pts = _read_points_bin(tgt_path)
+
+        # 1. Reflectance Intensity Distribution Transfer (raw points)
+        if include_reflectance:
+            src_r = src_pts[:, 3]
+            tgt_r = tgt_pts[:, 3]
+            src_pts[:, 3] = _histogram_reflectance_matching(src_r, tgt_r)
+
+        # Re-project source after reflectance change (depth unchanged)
+        depth_s_img, r_s_img, proj_y_s, proj_x_s, unproj_d_s = _project_raw_to_image(
+            src_pts, H, W, min_d, max_d
+        )
+
+        # 2. Range-View-Based Point Drop Pattern Transfer
+        depth_t_img, _, _, _, _ = _project_raw_to_image(tgt_pts, H, W, min_d, max_d)
+        keep_mask = _range_view_drop_mask(depth_t_img, min_d, max_d)
+        # Apply drop mask to source points
+        keep_src_rv = keep_mask[proj_y_s, proj_x_s]
+        src_pts = src_pts[keep_src_rv]
+
+        # Re-project after range view drop
+        depth_s_img, r_s_img, proj_y_s, proj_x_s, unproj_d_s = _project_raw_to_image(
+            src_pts, H, W, min_d, max_d
+        )
+
+        # 3. Distance-Aware Density Distribution Transfer
+        keep_density_mask = _density_matching(src_pts[:, :3], tgt_pts[:, :3], 0.0, 100.0)
+        src_pts = src_pts[keep_density_mask]
+
+        # Final projection to image
+        depth_s_img, r_s_img, _, _, _ = _project_raw_to_image(src_pts, H, W, min_d, max_d)
+
+        # Build tensor output channels
+        depth_img_metric = torch.from_numpy(depth_s_img).unsqueeze(0)  # 1, H, W
+        depth_mask = (depth_img_metric >= min_d) & (depth_img_metric <= max_d)  # bool: 1, H, W
+        x_depth = lidar_utils.normalize(lidar_utils.convert_depth(depth_img_metric))  # [-1, 1]
+        outs_ch = [x_depth]
+        if include_reflectance:
+            r_img = torch.from_numpy(np.clip(r_s_img, 0.0, 1.0)).unsqueeze(0)
+            r_img = lidar_utils.normalize(r_img)  # [0, 1] -> [-1, 1]
+            outs_ch.append(r_img)
+        x_hw = torch.cat(outs_ch, dim=0)  # C, H, W
+        x_hw = x_hw * depth_mask.to(dtype=x_hw.dtype, device=x_hw.device)
+        outs.append(x_hw)
+
+    x_0 = torch.stack(outs, dim=0)  # B, C, H, W
+    return x_0

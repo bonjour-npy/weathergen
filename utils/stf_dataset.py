@@ -87,11 +87,13 @@ class STFDataset(Dataset):
         weather: Literal["fog", "snow", "rain"] = "fog",
         resolution: Sequence[int] = (64, 1024),
         split_file_map: dict[str, str] | None = None,
+        return_dict: bool = False,
     ) -> None:
         super().__init__()
         self.root = Path(root)
         self.weather = weather
         self.H, self.W = int(resolution[0]), int(resolution[1])
+        self.return_dict = return_dict
 
         # 默认 splits 文件路径
         if split_file_map is None:
@@ -112,7 +114,14 @@ class STFDataset(Dataset):
         name = self.names[index]
         bin_path = _name_to_bin(self.root, name)
         x_np = _load_and_project_cached(str(bin_path), self.H, self.W)
-        return torch.from_numpy(x_np).float()  # [2, H, W]
+        x = torch.from_numpy(x_np).float()  # [2, H, W]
+        if self.return_dict:
+            return {
+                "x": x,  # [-1, 1], 2xHxW
+                "file_path": str(bin_path),
+                "name": name,
+            }
+        return x
 
 
 def build_stf_loader(
@@ -135,6 +144,30 @@ def build_stf_loader(
         persistent_workers=num_workers > 0,
     )
     # 仅在 num_workers>0 时可设置 prefetch_factor
+    if num_workers > 0:
+        kwargs["prefetch_factor"] = 2
+    return DataLoader(ds, **kwargs)
+
+
+def build_stf_loader_dict(
+    weather: Literal["fog", "snow", "rain"],
+    batch_size: int,
+    num_workers: int,
+    resolution: Sequence[int] = (64, 1024),
+    root: str | Path = "./data/SeeingThroughFog",
+    drop_last: bool = True,
+):
+    from torch.utils.data import DataLoader
+
+    ds = STFDataset(root=root, weather=weather, resolution=resolution, return_dict=True)
+    kwargs = dict(
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        drop_last=drop_last,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
+    )
     if num_workers > 0:
         kwargs["prefetch_factor"] = 2
     return DataLoader(ds, **kwargs)

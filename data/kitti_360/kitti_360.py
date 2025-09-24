@@ -36,18 +36,18 @@ def load_points_as_images(
     scan_unfolding: bool = True,
     H: int = 64,
     W: int = 2048,
-    min_depth: float = 1.45,
-    max_depth: float = 80.0,
+    min_depth: float = 0.0,
+    max_depth: float = 120.0,
 ):
     # load xyz & intensity and add depth & mask
-    points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 4))
+    points = np.fromfile(point_path, dtype=np.float32).reshape((-1, 4))  # x, y, z, reflectance
     xyz = points[:, :3]  # xyz
     x = xyz[:, [0]]
     y = xyz[:, [1]]
     z = xyz[:, [2]]
     depth = np.linalg.norm(xyz, ord=2, axis=1, keepdims=True)
     mask = (depth >= min_depth) & (depth <= max_depth)
-    points = np.concatenate([points, depth, mask], axis=1)
+    points = np.concatenate([points, depth, mask], axis=1)  # x, y, z, reflectance, depth, mask
 
     if scan_unfolding:
         # the i-th quadrant
@@ -79,8 +79,8 @@ def load_points_as_images(
         grid_h = np.floor(grid_h * H).clip(0, H - 1).astype(np.int32)
 
     # horizontal grid
-    azimuth = -np.arctan2(y, x)  # [-pi,pi]
-    grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0,1]
+    azimuth = -np.arctan2(y, x)  # [-pi, pi]
+    grid_w = (azimuth / np.pi + 1) / 2 % 1  # [0, 1]
     grid_w = np.floor(grid_w * W).clip(0, W - 1).astype(np.int32)
 
     grid = np.concatenate((grid_h, grid_w), axis=1)
@@ -133,6 +133,7 @@ class KITTI360(ds.GeneratorBasedBuilder):
         _, width = self._parse_config_name()
         features = {
             "sample_id": ds.Value("int32"),
+            "file_path": ds.Value("string"),
             "xyz": ds.Array3D((3, 64, width), "float32"),
             "reflectance": ds.Array3D((1, 64, width), "float32"),
             "depth": ds.Array3D((1, 64, width), "float32"),
@@ -167,6 +168,7 @@ class KITTI360(ds.GeneratorBasedBuilder):
             xyzrdm *= xyzrdm[[5]]
             yield sample_id, {
                 "sample_id": sample_id,
+                "file_path": str(file_path),
                 "xyz": xyzrdm[:3],
                 "reflectance": xyzrdm[[3]],
                 "depth": xyzrdm[[4]],

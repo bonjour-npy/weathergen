@@ -21,7 +21,7 @@ from simple_parsing import ArgumentParser
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from utils.weather import weather_process_swg
+from utils.weather import weather_process_swg, weather_process_swg_raw
 from utils.stf_dataset import build_stf_loader
 import utils.inference
 import utils.option
@@ -245,6 +245,8 @@ def train(cfg: utils.option.Config):
         if cfg.data.train_reflectance:
             reflectance = torch.stack([s["reflectance"] for s in samples], dim=0)  # (B, 1, H, W)
         xyz = torch.stack([s["xyz"] for s in samples], dim=0)  # (B, 3, H, W)
+        # 原始点云路径（用于 SWG 原始点增强）
+        src_bin_paths = [s.get("file_path") for s in samples]
 
         # 在 CPU 上完成与 preprocess 等价的操作
         x_parts = []
@@ -267,10 +269,17 @@ def train(cfg: utils.option.Config):
         else:
             weather_flag = "rain"
 
-        # x_0 = weather_process(x, weather_flag, xyz, depth)  # 原始 MDP
-
-        # Statistics-Based Weather Generator (SWG)
-        x_0 = weather_process_swg(x, weather_flag, xyz, depth)
+        # 若为正常天气，直接返回 x 作为 x_0
+        if weather_flag == "normal":
+            x_0 = x
+        else:
+            x_0 = weather_process_swg_raw(
+                src_bin_paths=src_bin_paths,
+                weather_flag=weather_flag,
+                lidar_utils=lidar_utils_cpu,
+                include_reflectance=bool(cfg.data.train_reflectance),
+                resolution=cfg.data.resolution,
+            )
 
         return {
             "x_0": x_0,  # (B, C, H, W)

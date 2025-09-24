@@ -88,8 +88,8 @@ class DataConfig:
     train_depth: bool = True
     train_reflectance: bool = True
     resolution: Tuple[int, int] = (64, 1024)
-    min_depth: float = 1.45
-    max_depth: float = 80.0
+    min_depth: float = 0.0
+    max_depth: float = 120.0
 
 
 @dataclasses.dataclass
